@@ -1,0 +1,20 @@
+# ============================================================
+# Dependências do pipeline científico — Diagnóstico TPB
+# Python ≥ 3.10
+# ============================================================
+pandas>=2.1
+numpy>=1.26
+scipy>=1.11
+statsmodels>=0.14
+pingouin>=0.5.4              # Spearman/Wilson com IC reais, κ Cohen
+scikit-learn>=1.4
+matplotlib>=3.8
+seaborn>=0.13
+openpyxl>=3.1                # leitura/escrita XLSX
+xlsxwriter>=3.1              # XLSX com formatação científica
+PyMySQL>=1.1                 # acesso ao MariaDB local
+SQLAlchemy>=2.0
+sshtunnel>=0.4               # túnel SSH para o Hostinger (modo remoto opcional)
+python-dotenv>=1.0
+reportlab>=4.0               # geração de PDF do QA report
+tableone>=0.8                # Tabela 1 acadêmica

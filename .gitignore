@@ -1,0 +1,65 @@
+# =====================================================================
+#  app_tpb — app web PÚBLICO. Exclui segredos, dumps de banco, dados,
+#  logs, material de paper e trabalho interno. O gate check_clean é a
+#  rede de segurança final antes do push.
+# =====================================================================
+
+# --- Segredos / configuração local e de servidor (NUNCA publicar) ---
+config.php
+config_local.php
+config_hostinger.php
+clima_config.php
+.env
+*.env
+.env.*
+secrets.*
+credentials.*
+*.key
+*.pem
+*.p12
+*.pfx
+
+# --- Dumps / bancos de dados / backups (dados de produção) ---
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+*.bak
+backups_sql/
+
+# --- Logs e temporários ---
+logs/
+*.log
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# --- Editores / SO / IDE ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Material de paper / apresentação / saídas de análise textual ---
+*.docx
+*.pptx
+*.ppt
+*poster*
+*Poster*
+**/manuscript*
+**/manuscrito*
+analise_python/outputs/
+
+# --- Arquivos com credencial embutida ou superfície sensível (repo público) ---
+variavel_clima.php
+backup.php
+export_backup.php
+
+# --- Trabalho interno / obsoletos / stubs / scaffolding ---
+obsoletos/
+_stubs/
+github/
+github_template/

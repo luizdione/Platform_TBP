@@ -1,0 +1,28 @@
+# environment.yml — conda env "datascience" (miniforge3)
+# Uso:
+#   conda env update -n datascience -f environment.yml
+# Ou para criar do zero:
+#   conda env create -n datascience -f environment.yml
+name: datascience
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - pandas>=2.1
+  - numpy>=1.26
+  - scipy>=1.11
+  - statsmodels>=0.14
+  - scikit-learn>=1.4
+  - matplotlib>=3.8
+  - seaborn>=0.13
+  - openpyxl>=3.1
+  - xlsxwriter>=3.1
+  - pymysql>=1.1
+  - sqlalchemy>=2.0
+  - python-dotenv>=1.0
+  - reportlab>=4.0
+  - pip
+  - pip:
+      - pingouin>=0.5.4
+      - sshtunnel>=0.4
+      - tableone>=0.8

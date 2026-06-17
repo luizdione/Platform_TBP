@@ -1,0 +1,83 @@
+# ============================================================
+# docker-compose.yml — Ambiente DEV local Diagnóstico TPB
+# ============================================================
+# Sobe três serviços:
+#   web        — Apache + PHP 8.2 (clone funcional da plataforma Hostinger)
+#   db         — MariaDB 11.x (espelho do schema u112348440_ifrj_crj_lgm)
+#   phpmyadmin — interface para administração do banco em http://localhost:8081
+#
+# Como subir:
+#   docker compose up -d
+# Como parar:
+#   docker compose down
+# Para popular do dump (1ª vez):
+#   docker compose exec -T db mariadb -uroot -ptpb_dev_root u112348440_ifrj_crj_lgm < u112348440_ifrj_crj_lgm.sql
+# ============================================================
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: tpb_web
+    ports:
+      - "8080:80"
+    volumes:
+      - ./:/var/www/html:rw
+      # Stub de auth_central.php — montado no caminho que ../../templates resolve.
+      # Caminho real do require:  /var/www/html/../../templates  →  /templates
+      # (sobe 2 niveis a partir de /var/www/html: /var/www → /var → /templates? NAO,
+      #  resolve para /var/www/html/../.. = /var, depois /templates → /templates).
+      # Para ser robusto, montamos o stub em DOIS caminhos possiveis:
+      - ./_stubs/templates:/templates:ro
+      - ./_stubs/templates:/var/templates:ro
+      - ./_stubs/templates:/var/www/templates:ro
+    environment:
+      MYSQLHOST: db
+      MYSQLPORT: 3306
+      MYSQLDATABASE: u112348440_ifrj_crj_lgm
+      MYSQLUSER: tpb_dev
+      MYSQLPASSWORD: tpb_dev_pwd
+      TPB_AMBIENTE: desenvolvimento
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: mariadb:11.4
+    container_name: tpb_db
+    ports:
+      - "3307:3306"          # 3307 fora para não colidir com MySQL local
+    environment:
+      MARIADB_ROOT_PASSWORD: tpb_dev_root
+      MARIADB_DATABASE: u112348440_ifrj_crj_lgm
+      MARIADB_USER: tpb_dev
+      MARIADB_PASSWORD: tpb_dev_pwd
+    volumes:
+      - tpb_db_data:/var/lib/mysql
+      - ./sql:/docker-entrypoint-initdb.d/sql:ro    # SQLs de migração disponíveis dentro
+      - ./u112348440_ifrj_crj_lgm.sql:/docker-entrypoint-initdb.d/00_seed.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  phpmyadmin:
+    image: phpmyadmin:5.2
+    container_name: tpb_pma
+    ports:
+      - "8081:80"
+    environment:
+      PMA_HOST: db
+      PMA_USER: tpb_dev
+      PMA_PASSWORD: tpb_dev_pwd
+      UPLOAD_LIMIT: 256M
+    depends_on:
+      - db
+    restart: unless-stopped
+
+volumes:
+  tpb_db_data:

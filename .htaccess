@@ -1,0 +1,59 @@
+# Ensure PHP is rendered and PHP homepage is preferred
+DirectoryIndex index.php index.html
+
+# Basic security headers (optional but helpful)
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set X-Frame-Options "SAMEORIGIN"
+  Header set X-XSS-Protection "1; mode=block"
+  Header set Referrer-Policy "no-referrer-when-downgrade"
+</IfModule>
+
+# Allow pretty URLs if needed later (requires mod_rewrite, already enabled in Dockerfile)
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  # Example: send all requests for non-existing files to index.php
+  # RewriteCond %{REQUEST_FILENAME} !-f
+  # RewriteCond %{REQUEST_FILENAME} !-d
+  # RewriteRule ^ index.php [L]
+</IfModule>
+
+# .htaccess
+# (não resolve o aviso, mas pode ser útil para configs do Apache)
+# Options -Indexes
+# Options +FollowSymLinks
+# RewriteEngine On
+# RewriteBase /
+
+# Protege o arquivo .htaccess
+<Files .htaccess>
+  Order Allow,Deny
+  Deny from all
+</Files>
+
+# Protege o arquivo de configuração do PHP
+<Files php.ini>
+  Order Allow,Deny
+  Deny from all
+</Files>
+
+# Protege arquivos sensíveis
+<FilesMatch "\.(env|ini|log|sh|inc|bak|old|sql|rar|zip|tar|gz)$">
+  Order Allow,Deny
+  Deny from all
+</FilesMatch>
+
+# Bloqueia arquivos de desenvolvimento local (Docker/conda) em producao
+<FilesMatch "^(docker-compose\.ya?ml|Dockerfile|config_local\.php|environment\.yml|requirements\.txt|.*\.bat|.*\.ps1)$">
+  Order Allow,Deny
+  Deny from all
+</FilesMatch>
+
+# Bloqueia subpastas DEV-only (caso espelhadas por engano)
+RedirectMatch 403 ^/aplicativos/diagnostico_tpb/(_stubs|docker|analise_python|sql|github|github_template|obsoletos|logs|backups_sql|ajuda_tutoriais)(/|$)
+
+# Bloqueia arquivos temporarios do Word/Office
+<FilesMatch "^~\$">
+  Order Allow,Deny
+  Deny from all
+</FilesMatch>
