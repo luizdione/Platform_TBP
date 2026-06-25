@@ -2790,9 +2790,11 @@ function corrChart(canvasId, eixoX, dataObj, cor) {
     const xmin = Math.min(...xs), xmax = Math.max(...xs);
     const xpad = (xmax - xmin) * 0.08 || 1;
     const maxN = Math.max(...pts.map(p => p.n || 1), 1);
-    const niceY = m => { if (m <= 0) return 10; const t = m * 1.15;
-        for (const c of [5,10,20,25,50,75,100]) if (c >= t) return c; return 100; };
-    const yMax = niceY(yPeak);
+    const niceY = m => { if (m <= 0) return 10; const t = m * 1.12;
+        for (const c of [5,10,15,20,25,30,40,50,60,70,80,90,100]) if (c >= t) return c; return 100; };
+    // Teto travado em <=100% com folga; a reta de tendencia eh recortada pelo grafico
+    // (antes podia esticar o eixo ate 120%, deixando os pontos colados no topo)
+    const yMax = Math.min(100, niceY(yPeak));
 
     const datasets = [{
         label: eixoX,
@@ -2830,7 +2832,7 @@ function corrChart(canvasId, eixoX, dataObj, cor) {
                 x: { type: 'linear', title: { display: true, text: eixoX },
                      min: xmin - xpad, max: xmax + xpad },
                 y: { title: { display: true, text: 'Prevalência (%)' },
-                     beginAtZero: true, suggestedMax: yMax, ticks: { callback: v => v + '%' } }
+                     beginAtZero: true, max: yMax, ticks: { callback: v => v + '%' } }
             }
         },
         plugins: [errorBarPlugin]
