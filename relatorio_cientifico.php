@@ -449,6 +449,226 @@ function wilson95($k, $n) {
 function fmt_pct($p) { return number_format($p*100, 1, ',', '.') . '%'; }
 function fmt_ci($w)  { return '[' . fmt_pct($w['lower']) . ' - ' . fmt_pct($w['upper']) . ']'; }
 
+// =================================================================
+// BIBLIOTECA ESTATISTICA (PHP puro — sem extensoes alem de PDO/math)
+// Funcoes especiais adaptadas de Numerical Recipes (gammln/gser/gcf/betacf).
+// Validada contra valores de referencia (normal, qui-quadrado, t de Student,
+// regressao logistica vs OR analitico 2x2, McNemar exato/assintotico, kappa).
+// =================================================================
+function _gammln($xx) {
+    $cof = [76.18009172947146, -86.50532032941677, 24.01409824083091,
+            -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5];
+    $x = $xx; $y = $xx; $tmp = $x + 5.5; $tmp -= ($x + 0.5) * log($tmp);
+    $ser = 1.000000000190015;
+    for ($j = 0; $j < 6; $j++) { $y += 1.0; $ser += $cof[$j] / $y; }
+    return -$tmp + log(2.5066282746310005 * $ser / $x);
+}
+function _gser($a, $x) {
+    if ($x <= 0) return 0.0;
+    $ap = $a; $sum = 1.0 / $a; $del = $sum;
+    for ($n = 1; $n <= 500; $n++) { $ap += 1.0; $del *= $x / $ap; $sum += $del;
+        if (abs($del) < abs($sum) * 1e-14) break; }
+    return $sum * exp(-$x + $a * log($x) - _gammln($a));
+}
+function _gcf($a, $x) {
+    $FPMIN = 1e-300; $b = $x + 1.0 - $a; $c = 1.0 / $FPMIN; $d = 1.0 / $b; $h = $d;
+    for ($i = 1; $i <= 500; $i++) {
+        $an = -$i * ($i - $a); $b += 2.0; $d = $an * $d + $b; if (abs($d) < $FPMIN) $d = $FPMIN;
+        $c = $b + $an / $c; if (abs($c) < $FPMIN) $c = $FPMIN; $d = 1.0 / $d; $del = $d * $c; $h *= $del;
+        if (abs($del - 1.0) < 1e-14) break; }
+    return exp(-$x + $a * log($x) - _gammln($a)) * $h;
+}
+function gammp($a, $x) { if ($x < 0 || $a <= 0) return 0.0; return ($x < $a + 1.0) ? _gser($a, $x) : 1.0 - _gcf($a, $x); }
+function gammq($a, $x) { return 1.0 - gammp($a, $x); }
+function _betacf($a, $b, $x) {
+    $FPMIN = 1e-300; $qab = $a + $b; $qap = $a + 1.0; $qam = $a - 1.0;
+    $c = 1.0; $d = 1.0 - $qab * $x / $qap; if (abs($d) < $FPMIN) $d = $FPMIN; $d = 1.0 / $d; $h = $d;
+    for ($m = 1; $m <= 300; $m++) {
+        $m2 = 2 * $m;
+        $aa = $m * ($b - $m) * $x / (($qam + $m2) * ($a + $m2));
+        $d = 1.0 + $aa * $d; if (abs($d) < $FPMIN) $d = $FPMIN;
+        $c = 1.0 + $aa / $c; if (abs($c) < $FPMIN) $c = $FPMIN; $d = 1.0 / $d; $h *= $d * $c;
+        $aa = -($a + $m) * ($qab + $m) * $x / (($a + $m2) * ($qap + $m2));
+        $d = 1.0 + $aa * $d; if (abs($d) < $FPMIN) $d = $FPMIN;
+        $c = 1.0 + $aa / $c; if (abs($c) < $FPMIN) $c = $FPMIN; $d = 1.0 / $d; $del = $d * $c; $h *= $del;
+        if (abs($del - 1.0) < 1e-14) break; }
+    return $h;
+}
+function betai($a, $b, $x) {
+    if ($x <= 0.0) return 0.0; if ($x >= 1.0) return 1.0;
+    $bt = exp(_gammln($a + $b) - _gammln($a) - _gammln($b) + $a * log($x) + $b * log(1.0 - $x));
+    if ($x < ($a + 1.0) / ($a + $b + 2.0)) return $bt * _betacf($a, $b, $x) / $a;
+    return 1.0 - $bt * _betacf($b, $a, 1.0 - $x) / $b;
+}
+function normCdf($z) {
+    if ($z >= 0) return 0.5 * (1.0 + gammp(0.5, $z * $z / 2.0));
+    return 0.5 * (1.0 - gammp(0.5, $z * $z / 2.0));
+}
+function normSf($z) { return 1.0 - normCdf($z); }
+function chiSqSf($x, $df) { if ($x <= 0) return 1.0; return gammq($df / 2.0, $x / 2.0); }
+function studentTwoSided($t, $df) { if ($df <= 0) return 1.0; $t = abs($t); return betai($df / 2.0, 0.5, $df / ($df + $t * $t)); }
+
+// Inferencia para o rho de Spearman: p-valor (aprox. t) + IC95% (Fisher z)
+function spearmanInfer($rho, $n) {
+    if ($rho === null || $n < 4) return ['p' => null, 'lo' => null, 'hi' => null];
+    $rho = max(-0.999999, min(0.999999, $rho));
+    $t = $rho * sqrt(($n - 2) / (1 - $rho * $rho));
+    $p = studentTwoSided($t, $n - 2);
+    $lo = null; $hi = null;
+    if ($n > 3) {
+        $zr = 0.5 * log((1 + $rho) / (1 - $rho)); $se = 1.0 / sqrt($n - 3);
+        $lo = tanh($zr - 1.959963984540054 * $se); $hi = tanh($zr + 1.959963984540054 * $se);
+    }
+    return ['p' => $p, 'lo' => $lo, 'hi' => $hi];
+}
+// Qui-quadrado de independencia para tabela RxC; retorna chi2, df, p, menor esperado
+function chiSquareTest($table) {
+    $R = count($table); if ($R < 2) return null;
+    $C = count($table[0]); if ($C < 2) return null;
+    $rowSum = array_fill(0, $R, 0.0); $colSum = array_fill(0, $C, 0.0); $tot = 0.0;
+    for ($i = 0; $i < $R; $i++) for ($j = 0; $j < $C; $j++) { $v = (float)$table[$i][$j]; $rowSum[$i] += $v; $colSum[$j] += $v; $tot += $v; }
+    if ($tot <= 0) return null;
+    $chi = 0.0; $minExp = INF;
+    for ($i = 0; $i < $R; $i++) for ($j = 0; $j < $C; $j++) {
+        $e = $rowSum[$i] * $colSum[$j] / $tot; if ($e <= 0) continue;
+        $minExp = min($minExp, $e); $chi += pow($table[$i][$j] - $e, 2) / $e; }
+    $df = ($R - 1) * ($C - 1);
+    return ['chi2' => $chi, 'df' => $df, 'p' => chiSqSf($chi, $df), 'min_expected' => $minExp];
+}
+// McNemar pareado a partir dos discordantes b (ref+/teste-) e c (ref-/teste+)
+function mcnemarTest($b, $c) {
+    $nd = $b + $c;
+    if ($nd === 0) return ['chi2' => 0.0, 'df' => 1, 'p' => 1.0, 'b' => $b, 'c' => $c, 'discordantes' => 0, 'metodo' => '—'];
+    if ($nd >= 25) {
+        $chi = pow(abs($b - $c) - 1, 2) / $nd;
+        return ['chi2' => $chi, 'df' => 1, 'p' => chiSqSf($chi, 1), 'b' => $b, 'c' => $c, 'discordantes' => $nd, 'metodo' => 'qui-quadrado (corr. continuidade)'];
+    }
+    $k = min($b, $c); $p = 0.0;
+    for ($i = 0; $i <= $k; $i++) $p += exp(_gammln($nd + 1) - _gammln($i + 1) - _gammln($nd - $i + 1)) * pow(0.5, $nd);
+    $p = min(1.0, 2.0 * $p);
+    return ['chi2' => null, 'df' => 1, 'p' => $p, 'b' => $b, 'c' => $c, 'discordantes' => $nd, 'metodo' => 'binomial exato'];
+}
+// IC95% assintotico do kappa de Cohen a partir do 2x2 (a,b,c,d)
+function kappaCI($a, $b, $c, $d) {
+    $n = $a + $b + $c + $d; if ($n == 0) return ['kappa' => null, 'lo' => null, 'hi' => null, 'se' => null];
+    $po = ($a + $d) / $n; $p1 = ($a + $b) / $n; $p2 = ($a + $c) / $n; $q1 = ($c + $d) / $n; $q2 = ($b + $d) / $n;
+    $pe = $p1 * $p2 + $q1 * $q2; if (abs(1 - $pe) < 1e-12) return ['kappa' => null, 'lo' => null, 'hi' => null, 'se' => null];
+    $k = ($po - $pe) / (1 - $pe);
+    $se = sqrt(($po * (1 - $po)) / ($n * pow(1 - $pe, 2)));
+    return ['kappa' => $k, 'se' => $se, 'lo' => $k - 1.959963984540054 * $se, 'hi' => $k + 1.959963984540054 * $se];
+}
+// Inversa de matriz por Gauss-Jordan com pivotamento parcial; null se singular
+function matInverse($A) {
+    $n = count($A); $M = [];
+    for ($i = 0; $i < $n; $i++) { $M[$i] = array_values($A[$i]); for ($j = 0; $j < $n; $j++) $M[$i][$n + $j] = ($i === $j) ? 1.0 : 0.0; }
+    for ($col = 0; $col < $n; $col++) {
+        $piv = $col; $best = abs($M[$col][$col]);
+        for ($r = $col + 1; $r < $n; $r++) if (abs($M[$r][$col]) > $best) { $best = abs($M[$r][$col]); $piv = $r; }
+        if ($best < 1e-12) return null;
+        if ($piv !== $col) { $tmp = $M[$piv]; $M[$piv] = $M[$col]; $M[$col] = $tmp; }
+        $d = $M[$col][$col]; for ($j = 0; $j < 2 * $n; $j++) $M[$col][$j] /= $d;
+        for ($r = 0; $r < $n; $r++) { if ($r === $col) continue; $f = $M[$r][$col]; if ($f == 0.0) continue;
+            for ($j = 0; $j < 2 * $n; $j++) $M[$r][$j] -= $f * $M[$col][$j]; }
+    }
+    $inv = []; for ($i = 0; $i < $n; $i++) $inv[$i] = array_slice($M[$i], $n, $n);
+    return $inv;
+}
+/**
+ * Regressao logistica multivariavel via IRLS (Newton-Raphson).
+ * $X: linhas de preditores (SEM intercepto, adicionado automaticamente); $y: 0/1.
+ * Preditores padronizados internamente -> OR reportado por +1 desvio-padrao (DP).
+ * Retorna null se n insuficiente / nao-convergiu / singular / preditor constante.
+ */
+function logisticFit($X, $y, $maxIter = 50, $tol = 1e-8) {
+    $n = count($X); if ($n < 1) return null;
+    $p = count($X[0]); if ($p < 1) return null;
+    if ($n < 5 * ($p + 1)) return null;
+    $mean = array_fill(0, $p, 0.0); $sd = array_fill(0, $p, 0.0);
+    for ($j = 0; $j < $p; $j++) {
+        for ($i = 0; $i < $n; $i++) $mean[$j] += $X[$i][$j]; $mean[$j] /= $n;
+        for ($i = 0; $i < $n; $i++) $sd[$j] += pow($X[$i][$j] - $mean[$j], 2);
+        $sd[$j] = sqrt($sd[$j] / max(1, $n - 1)); if ($sd[$j] < 1e-12) return null;
+    }
+    $Z = [];
+    for ($i = 0; $i < $n; $i++) { $row = [1.0]; for ($j = 0; $j < $p; $j++) $row[] = ($X[$i][$j] - $mean[$j]) / $sd[$j]; $Z[$i] = $row; }
+    $k = $p + 1; $beta = array_fill(0, $k, 0.0); $sumY = array_sum($y);
+    if ($sumY <= 0 || $sumY >= $n) return null;
+    $beta[0] = log($sumY / ($n - $sumY)); $cov = null;
+    for ($iter = 0; $iter < $maxIter; $iter++) {
+        $g = array_fill(0, $k, 0.0); $H = array_fill(0, $k, array_fill(0, $k, 0.0));
+        for ($i = 0; $i < $n; $i++) {
+            $eta = 0.0; for ($a = 0; $a < $k; $a++) $eta += $beta[$a] * $Z[$i][$a];
+            $mu = 1.0 / (1.0 + exp(-$eta)); $w = $mu * (1.0 - $mu); if ($w < 1e-10) $w = 1e-10;
+            $resid = $y[$i] - $mu;
+            for ($a = 0; $a < $k; $a++) { $g[$a] += $Z[$i][$a] * $resid;
+                for ($bb = $a; $bb < $k; $bb++) $H[$a][$bb] += $Z[$i][$a] * $Z[$i][$bb] * $w; }
+        }
+        for ($a = 0; $a < $k; $a++) for ($bb = 0; $bb < $a; $bb++) $H[$a][$bb] = $H[$bb][$a];
+        $Hinv = matInverse($H); if ($Hinv === null) return null;
+        $maxStep = 0.0;
+        for ($a = 0; $a < $k; $a++) { $step = 0.0; for ($bb = 0; $bb < $k; $bb++) $step += $Hinv[$a][$bb] * $g[$bb];
+            $beta[$a] += $step; $maxStep = max($maxStep, abs($step)); }
+        $cov = $Hinv; if ($maxStep < $tol) break;
+    }
+    if ($cov === null) return null;
+    $out = [];
+    for ($j = 0; $j < $p; $j++) {
+        $a = $j + 1; $b = $beta[$a]; $se = sqrt(max(0.0, $cov[$a][$a])); $z = $se > 0 ? $b / $se : 0.0;
+        $out[] = ['beta' => $b, 'se' => $se, 'z' => $z, 'p' => 2.0 * normSf(abs($z)),
+            'or' => exp($b), 'or_lo' => exp($b - 1.959963984540054 * $se), 'or_hi' => exp($b + 1.959963984540054 * $se),
+            'sd' => $sd[$j], 'mean' => $mean[$j]];
+    }
+    return ['n' => $n, 'eventos' => (int)$sumY, 'intercept' => $beta[0], 'coef' => $out];
+}
+// Regressao linear ponderada (para linha de tendencia nos bins): slope, intercept, r2
+function olsWeighted($points) {
+    $sw=0;$swx=0;$swy=0;$swxx=0;$swxy=0;$swyy=0;
+    foreach ($points as $pt) { $w = $pt['w'] ?? 1.0; $x = $pt['x']; $y = $pt['y'];
+        $sw+=$w;$swx+=$w*$x;$swy+=$w*$y;$swxx+=$w*$x*$x;$swxy+=$w*$x*$y;$swyy+=$w*$y*$y; }
+    if ($sw <= 0) return null;
+    $denom = $sw*$swxx - $swx*$swx; if (abs($denom) < 1e-12) return null;
+    $slope = ($sw*$swxy - $swx*$swy)/$denom; $intercept = ($swy - $slope*$swx)/$sw;
+    $num = $sw*$swxy - $swx*$swy; $den = sqrt(($sw*$swxx - $swx*$swx)*($sw*$swyy - $swy*$swy));
+    $r = $den > 1e-12 ? $num/$den : 0.0;
+    return ['slope'=>$slope,'intercept'=>$intercept,'r2'=>$r*$r];
+}
+// Maximo "redondo" para eixos: pega o teto agradavel acima do maior valor (+ folga), com limite
+function niceMax($vals, $cap = 100.0, $headroom = 0.15, $floor = 5.0) {
+    $vals = array_filter((array)$vals, fn($v) => $v !== null && is_numeric($v));
+    if (empty($vals)) return $cap;
+    $mx = max($vals) * (1 + $headroom);
+    if ($mx <= 0) return $floor;
+    $mx = min($mx, $cap);
+    $pot = pow(10, floor(log10(max($mx, 1e-9))));
+    $passos = [1, 2, 2.5, 5, 10];
+    foreach ($passos as $s) { $cand = $s * $pot; if ($cand >= $mx) { return min($cap, max($floor, $cand)); } }
+    return min($cap, max($floor, 10 * $pot));
+}
+// Formatacao pt-BR para p-valor e OR
+// fmt_p: valor "cru" HTML-safe para celulas de tabela ("&lt; 0,001" ou "0,034")
+function fmt_p($p) {
+    if ($p === null) return '—';
+    if ($p < 0.001) return '&lt; 0,001';
+    return number_format($p, 3, ',', '.');
+}
+// fmt_pclause: clausula para prosa ("p &lt; 0,001" ou "p = 0,034")
+function fmt_pclause($p) {
+    if ($p === null) return 'p = —';
+    if ($p < 0.001) return 'p &lt; 0,001';
+    return 'p = ' . number_format($p, 3, ',', '.');
+}
+function fmt_num($v, $dec = 2) { return $v === null ? '—' : number_format($v, $dec, ',', '.'); }
+// Nota inferencial de correlacao (rho + IC95% + p + R2 da tendencia)
+function notaCorr($rho, $infer, $trend) {
+    if (!isset($rho['rho']) || $rho['rho'] === null) return '<span style="color:#999">amostra insuficiente (n='.($rho['n']??0).')</span>';
+    $sig = ($infer['p'] !== null && $infer['p'] < 0.05);
+    $ci  = ($infer['lo'] !== null) ? ' · IC95% ['.fmt_num($infer['lo'],2).'; '.fmt_num($infer['hi'],2).']' : '';
+    $r2  = ($trend && isset($trend['r2'])) ? ' · R²='.fmt_num($trend['r2'],2) : '';
+    $cor = $sig ? '#157347' : '#555';
+    $star = $sig ? ' <b style="color:#157347" title="p &lt; 0,05">*</b>' : '';
+    return '<span style="color:'.$cor.'">ρ = '.fmt_num($rho['rho'],2).$ci.' · '.fmt_pclause($infer['p']).$star.' (n='.$rho['n'].')'.$r2.'</span>';
+}
+
 // =============== Detectar fonte de dados ===============
 $temView = false;
 try {
@@ -684,30 +904,37 @@ $parasitas = [
 $cores = ['#1F4E78','#C0504D','#9BBB59','#F79646','#8064A2'];
 
 $g1_labels = array_column($prev, 'fazenda');
-$g1_datasets = []; $ci=0;
+$g1_datasets = []; $ci=0; $g1_allHi = [];
 foreach ($parasitas as $col => $nome) {
     $values=[]; $errs=[];
     foreach ($prev as $r) {
         $n=(int)$r['n']; $k=(int)$r[$col]; $w=wilson95($k,$n);
         $values[] = round($w['p']*100,2);
-        $errs[]   = ['lo'=>round($w['lower']*100,2),'hi'=>round($w['upper']*100,2)];
+        $hi = round($w['upper']*100,2);
+        $errs[]   = ['lo'=>round($w['lower']*100,2),'hi'=>$hi];
+        $g1_allHi[] = $hi;
     }
     $g1_datasets[] = ['label'=>$nome,'data'=>$values,'errs'=>$errs,
         'backgroundColor'=>$cores[$ci%5].'cc','borderColor'=>$cores[$ci%5],'borderWidth'=>1];
     $ci++;
 }
+// Eixo Y dinamico: teto agradavel acima do maior IC superior (evita barras minusculas)
+$g1_ymax = niceMax($g1_allHi, 100.0);
 $g2_labels = array_column($prevEst,'estacao');
-$g2_datasets = []; $ci=0;
+$g2_datasets = []; $ci=0; $g2_allVals = [];
 foreach ($parasitas as $col => $nome) {
     $values=[];
     foreach ($prevEst as $r) {
         $n=(int)$r['n']; $k=(int)$r[$col];
-        $values[] = $n>0 ? round(100.0*$k/$n,2) : 0;
+        $v = $n>0 ? round(100.0*$k/$n,2) : 0;
+        $values[] = $v; $g2_allVals[] = $v;
     }
     $g2_datasets[] = ['label'=>$nome,'data'=>$values,'borderColor'=>$cores[$ci%5],
-        'backgroundColor'=>$cores[$ci%5].'33','tension'=>0.3,'fill'=>false];
+        'backgroundColor'=>$cores[$ci%5].'33','tension'=>0.25,'fill'=>false,
+        'pointRadius'=>4,'pointHoverRadius'=>6,'borderWidth'=>2.2];
     $ci++;
 }
+$g2_ymax = niceMax($g2_allVals, 100.0);
 $g3_labels = array_column($tab1,'fazenda');
 $g3_data = array_map('intval', array_column($tab1,'n_animais'));
 
@@ -802,6 +1029,123 @@ $rU = spearmanRho($pontosU);
 $binT = aggBins($dadosTemp);
 $binP = aggBins($dadosPluv);
 $binU = aggBins($dadosUmid);
+
+// =========================================================
+// INTEGRACAO CLIMA x EPIDEMIOLOGIA (estatistica inferencial)
+// =========================================================
+// Inferencia para o rho de Spearman ja calculado: p-valor (aprox. t) + IC95% (Fisher z)
+$siT = spearmanInfer($rT['rho'], $rT['n']);
+$siP = spearmanInfer($rP['rho'], $rP['n']);
+$siU = spearmanInfer($rU['rho'], $rU['n']);
+
+// Linha de tendencia (OLS ponderado pelo n de cada bin) sobre os pontos clima x prevalencia
+function trendDosBins($bin) {
+    if (empty($bin['data'])) return null;
+    $pts = array_map(fn($d) => ['x' => $d['x'], 'y' => $d['y'], 'w' => $d['n']], $bin['data']);
+    return olsWeighted($pts);
+}
+$trendT = trendDosBins($binT);
+$trendP = trendDosBins($binP);
+$trendU = trendDosBins($binU);
+
+// Dataset por observacao (dedup animal x data) com as 3 variaveis climaticas + desfechos.
+// So existe quando a view tem colunas climaticas populadas.
+function buildClimaDataset($pdo) {
+    try {
+        $sql = "SELECT
+                    AVG(temperatura_media)  AS temp,
+                    AVG(pluviometria_total) AS pluv,
+                    AVG(umidade_media)      AS umid,
+                    MAX(GREATEST(COALESCE(pcr_babesia,0), COALESCE(lamp_babesia_18s,0), COALESCE(lamp_babesia_cytb,0))) AS bb,
+                    MAX(COALESCE(pcr_anaplasma,0))   AS am,
+                    MAX(COALESCE(pcr_trypanosoma,0)) AS tv
+                FROM v_dados_cientificos
+                WHERE temperatura_media IS NOT NULL
+                  AND pluviometria_total IS NOT NULL
+                  AND umidade_media IS NOT NULL
+                GROUP BY codigo_animal, data_coleta";
+        return $pdo->query($sql)->fetchAll();
+    } catch (Throwable $e) { return []; }
+}
+$climaDS = buildClimaDataset($pdo);
+$nClimaDS = count($climaDS);
+
+// Regressao logistica multivariavel: infeccao (qualquer patogeno) ~ temp + pluv + umid
+// (OR por +1 desvio-padrao de cada variavel climatica, com IC95% Wald)
+$logit = null;
+if ($nClimaDS >= 30) {
+    $X = []; $yL = [];
+    foreach ($climaDS as $r) {
+        $X[]  = [(float)$r['temp'], (float)$r['pluv'], (float)$r['umid']];
+        $yL[] = (((int)$r['bb']) || ((int)$r['am']) || ((int)$r['tv'])) ? 1 : 0;
+    }
+    $fit = logisticFit($X, $yL);
+    if ($fit !== null) {
+        $rotPred = ['Temperatura média (°C)', 'Pluviometria (mm/90d)', 'Umidade média (%)'];
+        foreach ($fit['coef'] as $i => $cc) { $fit['coef'][$i]['rotulo'] = $rotPred[$i] ?? ('X' . $i); }
+        $logit = $fit;
+    }
+}
+
+// Associacao univariada por patogeno x variavel climatica (Spearman rho + p-valor)
+$climVars = [
+    'temp' => 'Temperatura (°C)',
+    'pluv' => 'Pluviometria (mm)',
+    'umid' => 'Umidade (%)',
+];
+$patAlvos = ['bb' => 'B. bovis', 'am' => 'A. marginale', 'tv' => 'T. vivax'];
+$climPat = []; // [patogeno][var] = ['rho'=>, 'p'=>, 'n'=>]
+foreach ($patAlvos as $pk => $pnome) {
+    foreach ($climVars as $ck => $crot) {
+        $pts = [];
+        foreach ($climaDS as $r) {
+            if ($r[$ck] === null) continue;
+            $pts[] = ['x' => (float)$r[$ck], 'y' => (float)$r[$pk]];
+        }
+        $sr  = spearmanRho($pts);
+        $inf = spearmanInfer($sr['rho'], $sr['n']);
+        $climPat[$pk][$ck] = ['rho' => $sr['rho'], 'p' => $inf['p'], 'n' => $sr['n']];
+    }
+}
+
+// =========== Sazonalidade: qui-quadrado estacao x infeccao (qualquer patogeno) ===========
+function buildSeasonInfect($pdo, $fonte, $whereExtra) {
+    try {
+        if ($fonte === 'v_dados_cientificos') {
+            $sql = "SELECT estacao, SUM(infect) AS pos, COUNT(*) AS n FROM (
+                        SELECT MAX(estacao) AS estacao,
+                            MAX(GREATEST(COALESCE(pcr_babesia,0),COALESCE(pcr_anaplasma,0),COALESCE(pcr_trypanosoma,0),
+                                         COALESCE(lamp_babesia_18s,0),COALESCE(lamp_babesia_cytb,0))) AS infect
+                        FROM v_dados_cientificos
+                        GROUP BY codigo_animal, data_coleta
+                    ) t WHERE estacao IS NOT NULL GROUP BY estacao";
+        } else {
+            $sql = "SELECT estacao, SUM(infect) AS pos, COUNT(*) AS n FROM (
+                        SELECT codigo_animal, data_coleta,
+                            MAX(CASE WHEN MONTH(ac.data_coleta) IN (12,1,2) THEN 'Verão'
+                                     WHEN MONTH(ac.data_coleta) IN (3,4,5)  THEN 'Outono'
+                                     WHEN MONTH(ac.data_coleta) IN (6,7,8)  THEN 'Inverno'
+                                     ELSE 'Primavera' END) AS estacao,
+                            MAX(GREATEST(COALESCE(ac.pcr_babesia,0),COALESCE(ac.pcr_anaplasma,0),COALESCE(ac.pcr_trypanosoma,0),
+                                         COALESCE(ac.lamp_babesia_18s,0),COALESCE(ac.lamp_babesia_cytb,0))) AS infect
+                        FROM animais_completos ac LEFT JOIN locais l ON l.id=ac.local_id
+                        WHERE l.ativo=1 $whereExtra
+                        GROUP BY codigo_animal, data_coleta
+                    ) t WHERE estacao IS NOT NULL GROUP BY estacao";
+        }
+        return $pdo->query($sql)->fetchAll();
+    } catch (Throwable $e) { return []; }
+}
+$seasonRows = buildSeasonInfect($pdo, $fonte, $whereExtra);
+$tabEstacao = []; $estLabels = []; $estPrev = [];
+foreach ($seasonRows as $r) {
+    $n = (int)$r['n']; $pos = (int)$r['pos'];
+    if ($n <= 0 || $r['estacao'] === null) continue;
+    $tabEstacao[] = [$pos, $n - $pos];
+    $estLabels[]  = $r['estacao'];
+    $estPrev[$r['estacao']] = ['pos' => $pos, 'n' => $n, 'prev' => 100.0 * $pos / $n];
+}
+$chiEstacao = count($tabEstacao) >= 2 ? chiSquareTest($tabEstacao) : null;
 
 // =============== TAREFA 2: Analise comparativa Babesia bovis ===============
 // PCR convencional (pcr_babesia) vs PCR-LAMP (lamp_babesia_18s e lamp_babesia_cytb)
@@ -903,6 +1247,15 @@ $kap_ct  = cohenKappa($pp_ct, $pn_ct, $np_ct, $nn_ct);
 
 $kap_lc  = cohenKappa($pp_lc, $pn_lc, $np_lc, $nn_lc);
 $acc_lc  = safeDiv($pp_lc + $nn_lc, $nTotalComp);
+
+// Testes pareados (McNemar) + IC95% do kappa para a comparacao metodologica
+// b = discordantes PCR+/teste- (pn) ; c = discordantes PCR-/teste+ (np)
+$mcn_18 = mcnemarTest($pn_18, $np_18);
+$mcn_ct = mcnemarTest($pn_ct, $np_ct);
+$mcn_lc = mcnemarTest($pn_lc, $np_lc);
+$kci_18 = kappaCI($pp_18, $pn_18, $np_18, $nn_18);
+$kci_ct = kappaCI($pp_ct, $pn_ct, $np_ct, $nn_ct);
+$kci_lc = kappaCI($pp_lc, $pn_lc, $np_lc, $nn_lc);
 
 // Wilson IC95% para prevalencia geral por metodo
 $wPCR     = wilson95($nPCR,     $nTotalComp);
@@ -1138,6 +1491,18 @@ $auc = 0;
 $pPlotROC = array_merge([['x'=>0,'y'=>0,'rotulo'=>'origem']], $pontosROC, [['x'=>1,'y'=>1,'rotulo'=>'topo']]);
 for ($i=1;$i<count($pPlotROC);$i++) {
     $auc += ($pPlotROC[$i]['x'] - $pPlotROC[$i-1]['x']) * ($pPlotROC[$i]['y'] + $pPlotROC[$i-1]['y']) / 2;
+}
+// IC95% de Hanley-McNeil para a AUC (n+ = PCR positivos, n- = PCR negativos)
+$n1_roc = $roc['so_18s']['vp'] + $roc['so_18s']['fn'];
+$n2_roc = $roc['so_18s']['fp'] + $roc['so_18s']['vn'];
+$aucCI = ['lo' => null, 'hi' => null];
+if ($n1_roc >= 1 && $n2_roc >= 1) {
+    $a = max(1e-9, min(1 - 1e-9, $auc));
+    $q1 = $a / (2 - $a); $q2 = 2 * $a * $a / (1 + $a);
+    $var = ($a * (1 - $a) + ($n1_roc - 1) * ($q1 - $a * $a) + ($n2_roc - 1) * ($q2 - $a * $a)) / ($n1_roc * $n2_roc);
+    if ($var < 0) $var = 0;
+    $se = sqrt($var); $zc = 1.959963984540054;
+    $aucCI = ['lo' => max(0, $a - $zc * $se), 'hi' => min(1, $a + $zc * $se)];
 }
 
 // =========================================================
@@ -1550,6 +1915,26 @@ foreach ($keysT as $k1) {
 </table>
 </div>
 
+<?php
+// Prevalencia agregada (qualquer patogeno) por estacao, na ordem sazonal
+$ordemEst = ['Verão','Outono','Inverno','Primavera'];
+$temAnyEst = !empty($estPrev);
+?>
+<?php if ($temAnyEst): ?>
+<p style="font-size:.9em;color:#444;margin:.2em 0 .6em;">
+  <b>Positividade global (qualquer patógeno) por estação:</b>
+  <?php $parts=[]; foreach ($ordemEst as $est) { if (isset($estPrev[$est])) { $e=$estPrev[$est]; $parts[]=htmlspecialchars($est).' '.number_format($e['prev'],1,',','.').'% ('.$e['pos'].'/'.$e['n'].')'; } } echo implode(' · ', $parts); ?>.
+</p>
+<?php endif; ?>
+<p style="font-size:.85em;color:#444;margin:.2em 0 1em;">
+  <b>Teste de independência estação × positividade (χ² de Pearson, qualquer patógeno):</b>
+  <?php if ($chiEstacao !== null): ?>
+    χ²(<?= $chiEstacao['df'] ?>) = <?= number_format($chiEstacao['chi2'],2,',','.') ?>; <?= fmt_pclause($chiEstacao['p']) ?> <?= $chiEstacao['p'] < 0.05 ? '(⇒ há associação)' : '(⇒ sem evidência de associação)' ?><?php if ($chiEstacao['min_expected'] < 5): ?> <span style="color:#a00;">— menor freq. esperada &lt; 5; interpretar com cautela (preferível teste exato)</span><?php endif; ?>.
+  <?php else: ?>
+    dados insuficientes (—).
+  <?php endif; ?>
+</p>
+
 <div class="chart-wrap"><h3>Grafico 2 - Prevalencia por estacao do ano</h3>
 <canvas id="g2" height="120"></canvas>
 <div class="chart-actions">
@@ -1655,6 +2040,19 @@ foreach ($keysT as $k1) {
   VP=Verdadeiro Positivo, FN=Falso Negativo, FP=Falso Positivo, VN=Verdadeiro Negativo,
   VPP=Valor Preditivo Positivo, VPN=Valor Preditivo Negativo. κ ≥ 0,80 indica concordância
   quase perfeita; 0,60-0,79 substancial; 0,40-0,59 moderada.
+</p>
+<p style="font-size:.82em;color:#333;margin-top:.4em;line-height:1.55;">
+  <b>Concordância κ de Cohen com IC95% assintótico:</b>
+  PCR×LAMP18S κ = <?= $kci_18['kappa'] !== null ? number_format($kci_18['kappa'],3,',','.').' [IC95% '.number_format($kci_18['lo'],3,',','.').'–'.number_format($kci_18['hi'],3,',','.').']' : '—' ?> ·
+  PCR×CytB κ = <?= $kci_ct['kappa'] !== null ? number_format($kci_ct['kappa'],3,',','.').' [IC95% '.number_format($kci_ct['lo'],3,',','.').'–'.number_format($kci_ct['hi'],3,',','.').']' : '—' ?> ·
+  18S×CytB κ = <?= $kci_lc['kappa'] !== null ? number_format($kci_lc['kappa'],3,',','.').' [IC95% '.number_format($kci_lc['lo'],3,',','.').'–'.number_format($kci_lc['hi'],3,',','.').']' : '—' ?>.
+</p>
+<p style="font-size:.82em;color:#333;margin-top:.2em;line-height:1.55;">
+  <b>Teste de McNemar (homogeneidade marginal — dados pareados):</b>
+  PCR×LAMP18S <?= fmt_pclause($mcn_18['p']) ?> (<?= htmlspecialchars($mcn_18['metodo']) ?>; discordantes b=<?= $mcn_18['b'] ?>/c=<?= $mcn_18['c'] ?>) ·
+  PCR×CytB <?= fmt_pclause($mcn_ct['p']) ?> (<?= htmlspecialchars($mcn_ct['metodo']) ?>; b=<?= $mcn_ct['b'] ?>/c=<?= $mcn_ct['c'] ?>) ·
+  18S×CytB <?= fmt_pclause($mcn_lc['p']) ?> (<?= htmlspecialchars($mcn_lc['metodo']) ?>; b=<?= $mcn_lc['b'] ?>/c=<?= $mcn_lc['c'] ?>).
+  <br><span style="color:#666;">p &lt; 0,05 ⇒ os métodos diferem na taxa de detecção (complementa o κ, que mede concordância). b/c = pares discordantes.</span>
 </p>
 </div>
 
@@ -2005,7 +2403,7 @@ foreach ($keysT as $k1) {
   </button>
 </div>
 <table id="tabela9">
-  <caption style="caption-side:top;text-align:left;font-weight:bold;padding:.3em 0;color:#1F4E78;">Tabela 9 - Critérios de positividade LAMP × PCR convencional (AUC empírica = <?= number_format($auc, 3, ',', '.') ?>)</caption>
+  <caption style="caption-side:top;text-align:left;font-weight:bold;padding:.3em 0;color:#1F4E78;">Tabela 9 - Critérios de positividade LAMP × PCR convencional (AUC empírica = <?= number_format($auc, 3, ',', '.') ?><?php if ($aucCI['lo'] !== null): ?>; IC95% <?= number_format($aucCI['lo'],3,',','.') ?>–<?= number_format($aucCI['hi'],3,',','.') ?> Hanley–McNeil<?php endif; ?>)</caption>
   <thead><tr>
     <th>Critério</th><th class="num">VP</th><th class="num">FN</th>
     <th class="num">FP</th><th class="num">VN</th>
@@ -2118,13 +2516,13 @@ foreach ($keysT as $k1) {
 
 
 <h2>Correlação Climática (NASA POWER, média de 90 dias antes da coleta)</h2>
-<p style="color:#666;font-size:.9em;">Cada ponto = bin de valor climático com a respectiva prevalência observada (% infectados em qualquer parasita) e IC95% Wilson. ρ de Spearman calculado sobre os pontos individuais (sem binning).</p>
+<p style="color:#666;font-size:.9em;">Cada ponto = bin de valor climático com a prevalência observada (% infectados em qualquer parasita) e IC95% Wilson (barras verticais). O <b>tamanho do ponto</b> é proporcional ao nº de amostras do bin e a <b>linha tracejada</b> é a tendência (regressão linear ponderada por n). O ρ de Spearman, com IC95% (Fisher z) e p-valor, é calculado sobre as observações individuais (sem binning); <b>*</b> indica p &lt; 0,05.</p>
 
 <div class="chart-grid" style="grid-template-columns:1fr 1fr 1fr;">
   <div class="chart-wrap">
     <h3>Gráfico 4 - Temperatura média (°C) × Prevalência</h3>
     <canvas id="g4" height="180"></canvas>
-    <p class="nota" style="font-size:.85em;">ρ Spearman = <?= $rT['rho'] !== null ? $rT['rho'] : '—' ?> (n = <?= $rT['n'] ?>)</p>
+    <p class="nota" style="font-size:.85em;"><?= notaCorr($rT, $siT, $trendT) ?></p>
     <div class="chart-actions">
       <button class="btn-dl" onclick="baixarGrafico('g4','Grafico4_Temperatura_Prevalencia')">
         <svg viewBox="0 0 24 24"><path d="M5 3v18h14V3H5z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
@@ -2135,7 +2533,7 @@ foreach ($keysT as $k1) {
   <div class="chart-wrap">
     <h3>Gráfico 5 - Pluviometria total (mm/90d) × Prevalência</h3>
     <canvas id="g5" height="180"></canvas>
-    <p class="nota" style="font-size:.85em;">ρ Spearman = <?= $rP['rho'] !== null ? $rP['rho'] : '—' ?> (n = <?= $rP['n'] ?>)</p>
+    <p class="nota" style="font-size:.85em;"><?= notaCorr($rP, $siP, $trendP) ?></p>
     <div class="chart-actions">
       <button class="btn-dl" onclick="baixarGrafico('g5','Grafico5_Pluviometria_Prevalencia')">
         <svg viewBox="0 0 24 24"><path d="M5 3v18h14V3H5z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
@@ -2146,7 +2544,7 @@ foreach ($keysT as $k1) {
   <div class="chart-wrap">
     <h3>Gráfico 6 - Umidade média (%) × Prevalência</h3>
     <canvas id="g6" height="180"></canvas>
-    <p class="nota" style="font-size:.85em;">ρ Spearman = <?= $rU['rho'] !== null ? $rU['rho'] : '—' ?> (n = <?= $rU['n'] ?>)</p>
+    <p class="nota" style="font-size:.85em;"><?= notaCorr($rU, $siU, $trendU) ?></p>
     <div class="chart-actions">
       <button class="btn-dl" onclick="baixarGrafico('g6','Grafico6_Umidade_Prevalencia')">
         <svg viewBox="0 0 24 24"><path d="M5 3v18h14V3H5z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
@@ -2161,6 +2559,109 @@ foreach ($keysT as $k1) {
 <b>Sem dados climáticos vinculados.</b> Vá em <a href="manutencao.php#backup">Manutenção → Carga clima</a>
 e clique em "⬇️ Carregar 90d clima na NASA POWER" para popular dados_climaticos.
 </div>
+<?php endif; ?>
+
+
+<!-- ============================================================
+     INTEGRACAO CLIMA x EPIDEMIOLOGIA — modelo multivariavel
+     ============================================================ -->
+<h2>Integração clima → epidemiologia: modelo multivariável</h2>
+<p style="color:#444;font-size:.92em;line-height:1.55;">
+  Regressão logística (IRLS) de <b>infecção por qualquer patógeno (0/1)</b> em função de
+  <b>temperatura média + pluviometria total + umidade média</b> (NASA POWER, média de 90&nbsp;dias pré-coleta),
+  ajustadas simultaneamente. Os preditores são padronizados, de modo que cada <b>razão de chances (OR)</b>
+  corresponde ao efeito de <b>+1 desvio-padrão</b> da variável climática, mantendo as demais constantes.
+  Diferente dos gráficos 4–6 (univariados), este modelo separa o efeito de cada variável do efeito das outras.
+</p>
+<?php if ($logit === null): ?>
+  <div style="background:#fff3cd;color:#664d03;padding:12px;border-radius:4px;">
+    <b>Modelo não estimado.</b> Requer ≥ 30 amostras com clima vinculado, desfecho com variabilidade e
+    preditores não colineares/constantes. Amostras com clima completo disponíveis: <b><?= (int)$nClimaDS ?></b>.
+    À medida que as coletas sazonais avançarem (4 estações × 3 localidades), o n crescerá e o modelo ganhará poder.
+  </div>
+<?php else: ?>
+  <?php $epv = $logit['eventos'] > 0 ? round($logit['eventos'] / 4, 1) : 0; ?>
+  <p style="font-size:.88em;color:#444;margin:.2em 0;">
+    n = <?= (int)$logit['n'] ?> amostras · eventos (infectados) = <?= (int)$logit['eventos'] ?> ·
+    EPV ≈ <?= number_format($epv,1,',','.') ?><?php if ($epv < 10): ?>
+    <span style="color:#a00;">(EPV &lt; 10 ⇒ estimativas exploratórias, risco de sobreajuste)</span><?php endif; ?>
+  </p>
+  <div class="table-section">
+  <div class="dl-bar">
+    <button class="btn-dl" onclick="baixarTabela('tabela_logit','Tabela_Modelo_Logistico_Clima')">
+      <svg viewBox="0 0 24 24"><path d="M5 3v18h14V3H5z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+      Baixar Tabela
+    </button>
+  </div>
+  <table id="tabela_logit">
+    <caption style="caption-side:top;text-align:left;font-weight:bold;padding:.3em 0;color:#1F4E78;">Modelo logístico multivariável — OR por +1 desvio-padrão (IC95% Wald)</caption>
+    <thead><tr><th>Preditor (por +1 DP)</th><th class="num">OR</th><th class="num">IC95%</th><th class="num">z (Wald)</th><th class="num">p</th></tr></thead>
+    <tbody>
+    <?php foreach ($logit['coef'] as $c):
+        $sig = ($c['p'] !== null && $c['p'] < 0.05); ?>
+      <tr<?= $sig ? ' style="background:#eef7ee;"' : '' ?>>
+        <td><?= htmlspecialchars($c['rotulo']) ?></td>
+        <td class="num"><b><?= number_format($c['or'],3,',','.') ?></b></td>
+        <td class="num">[<?= number_format($c['or_lo'],3,',','.') ?> – <?= number_format($c['or_hi'],3,',','.') ?>]</td>
+        <td class="num"><?= number_format($c['z'],3,',','.') ?></td>
+        <td class="num"><?= fmt_p($c['p']) ?><?= $sig ? ' <b style="color:#157347">*</b>' : '' ?></td>
+      </tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table>
+  </div>
+  <div class="chart-wrap">
+    <h3>Gráfico 13 - Forest plot dos OR climáticos (escala log)</h3>
+    <canvas id="g13" style="display:block;"></canvas>
+    <div class="chart-actions">
+      <button class="btn-dl" onclick="baixarGrafico('g13','Grafico13_ForestPlot_OR_Clima')">
+        <svg viewBox="0 0 24 24"><path d="M5 3v18h14V3H5z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        Baixar Gráfico
+      </button>
+    </div>
+  </div>
+  <p style="font-size:.82em;color:#666;">
+    OR &gt; 1 ⇒ maior chance de infecção a cada +1 DP do preditor; OR &lt; 1 ⇒ menor chance.
+    IC95% que cruza a linha de OR = 1 ⇒ não significativo a 5%. <b>*</b> marca p &lt; 0,05.
+    Associações <b>descritivas/ecológicas</b>, não causais: poucas fazendas, clima agregado por fazenda e
+    possível confundimento por manejo e estação.
+  </p>
+<?php endif; ?>
+
+<h3 style="color:#1F4E78;margin-top:1.2em;">Associação univariada clima × patógeno (Spearman)</h3>
+<?php if (empty($climPat) || $nClimaDS == 0): ?>
+  <div style="background:#fff3cd;color:#664d03;padding:12px;border-radius:4px;"><b>Sem dados climáticos vinculados.</b></div>
+<?php else: ?>
+  <div class="table-section">
+  <div class="dl-bar">
+    <button class="btn-dl" onclick="baixarTabela('tabela_climpat','Tabela_Clima_Patogeno_Spearman')">
+      <svg viewBox="0 0 24 24"><path d="M5 3v18h14V3H5z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+      Baixar Tabela
+    </button>
+  </div>
+  <table id="tabela_climpat">
+    <caption style="caption-side:top;text-align:left;font-weight:bold;padding:.3em 0;color:#1F4E78;">Spearman ρ (p-valor; n) — patógeno × variável climática</caption>
+    <thead><tr><th>Patógeno</th><?php foreach ($climVars as $crot) echo '<th class="num">'.htmlspecialchars($crot).'</th>'; ?></tr></thead>
+    <tbody>
+    <?php foreach ($patAlvos as $pk => $pnome): ?>
+      <tr><td><i><?= htmlspecialchars($pnome) ?></i></td>
+      <?php foreach ($climVars as $ck => $crot): $cell = $climPat[$pk][$ck];
+        $sig = ($cell['p'] !== null && $cell['p'] < 0.05) ? 'font-weight:700;color:#1F4E78;background:#eef4fb;' : ''; ?>
+        <td class="num" style="<?= $sig ?>"><?= $cell['rho'] !== null ? number_format($cell['rho'],3,',','.') : '—' ?>
+          <span style="font-weight:400;color:#888;font-size:.85em;">(<?= fmt_pclause($cell['p']) ?>; n=<?= $cell['n'] ?>)</span></td>
+      <?php endforeach; ?>
+      </tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table>
+  </div>
+  <p style="font-size:.82em;color:#666;">
+    ρ de Spearman (empates por rank médio). Como o desfecho é 0/1, há muitos empates e o ρ tende a ser atenuado
+    (o modelo logístico acima é a leitura principal). p sem correção para múltiplas comparações (exploratório).
+    Células destacadas: p &lt; 0,05. <i>Rhipicephalus (Boophilus) microplus</i> — vetor de <i>B. bovis</i> e
+    <i>A. marginale</i> — tem desenvolvimento favorecido por calor e umidade, o que motiva o acompanhamento
+    conjunto clima × positividade ao longo das estações.
+  </p>
 <?php endif; ?>
 
 
@@ -2225,15 +2726,35 @@ const errorBarPlugin = {
 new Chart(document.getElementById('g1'),{
     type:'bar',
     data:{labels:<?= json_encode($g1_labels) ?>, datasets:<?= json_encode($g1_datasets) ?>},
-    options:{plugins:{legend:{position:'bottom'}},
-        scales:{y:{beginAtZero:true,max:100,title:{display:true,text:'Prevalencia (%)'}}}},
+    options:{
+        plugins:{
+            legend:{position:'bottom'},
+            tooltip:{callbacks:{label:c=>{
+                const ds=c.dataset; const e=ds.errs&&ds.errs[c.dataIndex];
+                let s=`${ds.label}: ${c.parsed.y.toFixed(1)}%`;
+                if(e) s+=` (IC95% ${e.lo.toFixed(1)}–${e.hi.toFixed(1)}%)`;
+                return s;
+            }}}
+        },
+        scales:{y:{beginAtZero:true,suggestedMax:<?= $g1_ymax ?>,
+            title:{display:true,text:'Prevalência (%)'},
+            ticks:{callback:v=>v+'%'}}}
+    },
     plugins:[errorBarPlugin]
 });
 new Chart(document.getElementById('g2'),{
     type:'line',
     data:{labels:<?= json_encode($g2_labels) ?>, datasets:<?= json_encode($g2_datasets) ?>},
-    options:{plugins:{legend:{position:'bottom'}},
-        scales:{y:{beginAtZero:true,max:100,title:{display:true,text:'Prevalencia (%)'}}}}
+    options:{
+        plugins:{
+            legend:{position:'bottom'},
+            tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y.toFixed(1)}%`}}
+        },
+        interaction:{mode:'index',intersect:false},
+        scales:{y:{beginAtZero:true,suggestedMax:<?= $g2_ymax ?>,
+            title:{display:true,text:'Prevalência (%)'},
+            ticks:{callback:v=>v+'%'}}}
+    }
 });
 new Chart(document.getElementById('g3'),{
     type:'doughnut',
@@ -2245,50 +2766,143 @@ new Chart(document.getElementById('g3'),{
 });
 
 // ========== Gráficos 4, 5, 6 — Correlação clima x prevalência ==========
-function corrChart(canvasId, titulo, eixoX, dataObj, cor) {
+function corrChart(canvasId, eixoX, dataObj, cor) {
     const el = document.getElementById(canvasId);
     if (!el) return;
-    if (!dataObj.data || dataObj.data.length === 0) {
+    const pts = dataObj.data || [];
+    if (pts.length === 0) {
         const ctx = el.getContext('2d');
-        ctx.fillStyle = '#888'; ctx.font = '12px Arial'; ctx.textAlign = 'center';
+        ctx.fillStyle = '#888'; ctx.font = '13px Arial'; ctx.textAlign = 'center';
         ctx.fillText('Sem dados climáticos vinculados.', el.width/2, 60);
         return;
     }
+    // Limites de eixo dinamicos (evita Y fixo em 100 e X mal escalado)
+    const xs   = pts.map(p => p.x);
+    const hiAr = (dataObj.errs || []).map(e => e.hi);
+    const yPeak = Math.max(...pts.map(p => p.y), ...(hiAr.length ? hiAr : [0]));
+    const xmin = Math.min(...xs), xmax = Math.max(...xs);
+    const xpad = (xmax - xmin) * 0.08 || 1;
+    const maxN = Math.max(...pts.map(p => p.n || 1), 1);
+    const niceY = m => { if (m <= 0) return 10; const t = m * 1.15;
+        for (const c of [5,10,20,25,50,75,100]) if (c >= t) return c; return 100; };
+    const yMax = niceY(yPeak);
+
+    const datasets = [{
+        label: eixoX,
+        data: pts,
+        errs: dataObj.errs,
+        backgroundColor: cor + 'cc',
+        borderColor: cor,
+        // Raio do ponto proporcional ao n do bin (mais dados = ponto maior)
+        pointRadius: c => 4 + 9 * Math.sqrt((c.raw.n || 1) / maxN),
+        pointHoverRadius: c => 6 + 9 * Math.sqrt((c.raw.n || 1) / maxN),
+        showLine: false
+    }];
+    // Linha de tendencia (OLS ponderado pelo n), se calculada no servidor
+    if (dataObj.trend) {
+        const s = dataObj.trend.slope, b = dataObj.trend.intercept;
+        const x0 = xmin - xpad, x1 = xmax + xpad;
+        datasets.push({
+            label: 'Tendência (OLS)',
+            data: [{x:x0, y:s*x0+b}, {x:x1, y:s*x1+b}],
+            borderColor: '#333', borderDash: [6,4], borderWidth: 1.5,
+            pointRadius: 0, showLine: true, fill: false
+        });
+    }
     new Chart(el, {
         type: 'scatter',
-        data: { datasets: [{
-            label: titulo,
-            data: dataObj.data,
-            errs: dataObj.errs,
-            backgroundColor: cor,
-            borderColor: cor,
-            pointRadius: 6,
-            pointHoverRadius: 8,
-            showLine: true,
-            tension: 0,
-            fill: false,
-            borderWidth: 1.5
-        }]},
+        data: { datasets },
         options: {
-            plugins: { legend: { display: false },
-                tooltip: { callbacks: {
-                    label: c => `${eixoX}=${c.parsed.x}, prev=${c.parsed.y.toFixed(1)}% (n=${c.raw.n||'?'})`
+            plugins: {
+                legend: { display: false },
+                tooltip: { filter: c => c.datasetIndex === 0, callbacks: {
+                    label: c => `${eixoX} = ${c.parsed.x}; prev = ${c.parsed.y.toFixed(1)}% (n=${c.raw.n||'?'})`
                 }}
             },
             scales: {
-                x: { title: { display: true, text: eixoX } },
-                y: { title: { display: true, text: 'Prevalência (%)' }, beginAtZero: true, max: 100 }
+                x: { type: 'linear', title: { display: true, text: eixoX },
+                     min: xmin - xpad, max: xmax + xpad },
+                y: { title: { display: true, text: 'Prevalência (%)' },
+                     beginAtZero: true, suggestedMax: yMax, ticks: { callback: v => v + '%' } }
             }
         },
         plugins: [errorBarPlugin]
     });
 }
-corrChart('g4', 'Temperatura média (°C)', 'Temp média (°C)',
-    {data: <?= json_encode($binT['data']) ?>, errs: <?= json_encode($binT['errs']) ?>}, '#dc3545');
-corrChart('g5', 'Pluviometria total (mm)', 'Pluviometria (mm/90d)',
-    {data: <?= json_encode($binP['data']) ?>, errs: <?= json_encode($binP['errs']) ?>}, '#0d6efd');
-corrChart('g6', 'Umidade média (%)', 'Umidade média (%)',
-    {data: <?= json_encode($binU['data']) ?>, errs: <?= json_encode($binU['errs']) ?>}, '#198754');
+corrChart('g4', 'Temp. média (°C)',
+    {data: <?= json_encode($binT['data']) ?>, errs: <?= json_encode($binT['errs']) ?>, trend: <?= json_encode($trendT) ?>}, '#dc3545');
+corrChart('g5', 'Pluviometria (mm/90d)',
+    {data: <?= json_encode($binP['data']) ?>, errs: <?= json_encode($binP['errs']) ?>, trend: <?= json_encode($trendP) ?>}, '#0d6efd');
+corrChart('g6', 'Umidade média (%)',
+    {data: <?= json_encode($binU['data']) ?>, errs: <?= json_encode($binU['errs']) ?>, trend: <?= json_encode($trendU) ?>}, '#198754');
+
+// ========== Gráfico 13 — Forest plot dos OR do modelo logístico (canvas custom, escala log) ==========
+<?php if ($logit !== null): ?>
+const forestData = <?= json_encode(array_map(fn($c) => [
+    'rotulo' => $c['rotulo'],
+    'or'  => round($c['or'], 3),
+    'lo'  => round($c['or_lo'], 3),
+    'hi'  => round($c['or_hi'], 3),
+    'p'   => $c['p'],
+], $logit['coef'])) ?>;
+function renderForestPlot() {
+    const canvas = document.getElementById('g13');
+    if (!canvas || !forestData.length) return;
+    const parent = canvas.parentElement;
+    const padLeft = 196, padRight = 150, padTop = 40, padBottom = 50, rowH = 48;
+    const W = canvas.width = Math.max(560, parent.clientWidth - 4);
+    const H = canvas.height = padTop + forestData.length * rowH + padBottom;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, W, H); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+    const plotW = W - padLeft - padRight;
+    // Faixa do eixo X em escala log (sempre inclui OR = 1)
+    let lo = Math.min(1, ...forestData.map(d => d.lo)) * 0.85;
+    let hi = Math.max(1, ...forestData.map(d => d.hi)) * 1.15;
+    if (!(lo > 0)) lo = 0.1; if (!(hi > lo)) hi = lo * 10;
+    const L = Math.log10(lo), R = Math.log10(hi);
+    const xpix = v => padLeft + (Math.log10(Math.max(v, 1e-6)) - L) / (R - L) * plotW;
+    // Titulo
+    ctx.fillStyle = '#1F4E78'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('OR por +1 desvio-padrão (escala log, IC95% Wald)', W / 2, 20);
+    // Grade / ticks log
+    const cand = [0.1, 0.2, 0.25, 0.5, 1, 2, 3, 5, 10, 20, 50, 100];
+    ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+    cand.forEach(t => {
+        if (t < lo || t > hi) return;
+        const x = xpix(t), ref = (t === 1);
+        ctx.strokeStyle = ref ? '#c0504d' : '#e6e6e6';
+        ctx.lineWidth = ref ? 1.6 : 1;
+        ctx.setLineDash(ref ? [5, 4] : []);
+        ctx.beginPath(); ctx.moveTo(x, padTop - 6); ctx.lineTo(x, H - padBottom + 6); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = ref ? '#c0504d' : '#888';
+        ctx.fillText(ref ? '1 (sem efeito)' : String(t), x, H - padBottom + 20);
+    });
+    ctx.fillStyle = '#555'; ctx.font = '11px sans-serif';
+    ctx.fillText('Odds Ratio (escala log)', padLeft + plotW / 2, H - 10);
+    // Linhas (uma por preditor)
+    forestData.forEach((d, i) => {
+        const y = padTop + i * rowH + rowH / 2;
+        ctx.fillStyle = '#222'; ctx.font = '12px sans-serif'; ctx.textAlign = 'right';
+        ctx.fillText(d.rotulo, padLeft - 12, y + 4);
+        const xl = xpix(d.lo), xh = xpix(d.hi), xo = xpix(d.or);
+        ctx.strokeStyle = '#1F4E78'; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(xl, y); ctx.lineTo(xh, y);
+        ctx.moveTo(xl, y - 6); ctx.lineTo(xl, y + 6);
+        ctx.moveTo(xh, y - 6); ctx.lineTo(xh, y + 6);
+        ctx.stroke();
+        const sig = (d.p !== null && d.p < 0.05);
+        ctx.fillStyle = sig ? '#157347' : '#1F4E78';
+        ctx.beginPath(); ctx.arc(xo, y, 7, 0, 2 * Math.PI); ctx.fill();
+        // Valor numerico na margem direita (alinhado)
+        ctx.fillStyle = '#333'; ctx.font = (sig ? 'bold ' : '') + '11px sans-serif'; ctx.textAlign = 'left';
+        ctx.fillText(`${d.or.toFixed(2)} [${d.lo.toFixed(2)}–${d.hi.toFixed(2)}]${sig ? ' *' : ''}`, W - padRight + 8, y + 4);
+    });
+}
+document.addEventListener('DOMContentLoaded', renderForestPlot);
+window.addEventListener('resize', () => setTimeout(renderForestPlot, 100));
+<?php endif; ?>
 
 
 // =================================================================
@@ -2608,7 +3222,7 @@ new Chart(document.getElementById('g7a'), {
             }
         },
         scales: {
-            y: { beginAtZero: true, title: { display: true, text: 'N amostras positivas' } },
+            y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'N amostras positivas' } },
             x: { ticks: { font: { size: 10 }, maxRotation: 25, minRotation: 0 } }
         }
     }
@@ -2673,7 +3287,7 @@ new Chart(document.getElementById('g7b'), {
             }
         },
         scales: {
-            x: { beginAtZero: true, title: { display: true, text: 'N amostras' } },
+            x: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'N amostras' } },
             y: { ticks: { font: { size: 10 } } }
         }
     }
@@ -2731,7 +3345,7 @@ new Chart(document.getElementById('g8'), {
                 }
             }
         },
-        scales: { x: { beginAtZero: true, title: { display: true, text: 'N amostras' } } }
+        scales: { x: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'N amostras' } } }
     }
 });
 
@@ -2764,7 +3378,7 @@ new Chart(document.getElementById('g9a'), {
         },
         scales: {
             x: { stacked: true },
-            y: { stacked: true, beginAtZero: true, title: { display: true, text: 'N animais' } }
+            y: { stacked: true, beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'N animais' } }
         }
     }
 });
@@ -2788,7 +3402,7 @@ new Chart(document.getElementById('g9b'), {
             legend: { display: false },
             title: { display: true, text: '(B) Distribuição de amostras por animal' }
         },
-        scales: { y: { beginAtZero: true, title: { display: true, text: 'N animais' } } }
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'N animais' } } }
     }
 });
 
@@ -2799,32 +3413,32 @@ new Chart(document.getElementById('g9b'), {
 const tempos18s  = <?= json_encode($tempos18s) ?>;
 const temposCytb = <?= json_encode($temposCytb) ?>;
 
-function histograma(arr, nBins) {
-    if (!arr.length) return { labels: [], counts: [] };
-    const mn = Math.min(...arr), mx = Math.max(...arr);
+// Histograma com bins COMPARTILHADOS entre as duas series.
+// (Antes cada serie usava seu proprio min/max -> bins desalinhados no mesmo eixo.)
+function histogramasCompartilhados(arrA, arrB, nBins) {
+    const todos = arrA.concat(arrB);
+    if (!todos.length) return { labels: [], a: [], b: [] };
+    const mn = Math.min(...todos), mx = Math.max(...todos);
     const w = (mx - mn) / nBins || 1;
-    const counts = new Array(nBins).fill(0);
-    const labels = [];
+    const labels = [], a = new Array(nBins).fill(0), b = new Array(nBins).fill(0);
     for (let i = 0; i < nBins; i++) {
-        const lo = mn + i * w, hi = mn + (i+1) * w;
-        labels.push(`${lo.toFixed(0)}-${hi.toFixed(0)}`);
+        const lo = mn + i * w, hi = mn + (i + 1) * w;
+        labels.push(`${lo.toFixed(0)}–${hi.toFixed(0)}`);
     }
-    arr.forEach(v => {
-        const idx = Math.min(nBins - 1, Math.floor((v - mn) / w));
-        counts[idx]++;
-    });
-    return { labels, counts };
+    const bin = v => Math.min(nBins - 1, Math.max(0, Math.floor((v - mn) / w)));
+    arrA.forEach(v => a[bin(v)]++);
+    arrB.forEach(v => b[bin(v)]++);
+    return { labels, a, b };
 }
-const h18 = histograma(tempos18s,  8);
-const hCt = histograma(temposCytb, 8);
+const hShared = histogramasCompartilhados(tempos18s, temposCytb, 8);
 
 new Chart(document.getElementById('g10a'), {
     type: 'bar',
     data: {
-        labels: h18.labels.length >= hCt.labels.length ? h18.labels : hCt.labels,
+        labels: hShared.labels,
         datasets: [
-            { label: 'LAMP 18S', data: h18.counts, backgroundColor: '#9BBB59cc', borderColor: '#5C7A2D', borderWidth: 1 },
-            { label: 'LAMP CytB', data: hCt.counts, backgroundColor: '#F79646cc', borderColor: '#B85C00', borderWidth: 1 }
+            { label: 'LAMP 18S', data: hShared.a, backgroundColor: '#9BBB59cc', borderColor: '#5C7A2D', borderWidth: 1 },
+            { label: 'LAMP CytB', data: hShared.b, backgroundColor: '#F79646cc', borderColor: '#B85C00', borderWidth: 1 }
         ]
     },
     options: {
@@ -2835,7 +3449,7 @@ new Chart(document.getElementById('g10a'), {
         },
         scales: {
             x: { title: { display: true, text: 'Faixa de tempo (min)' } },
-            y: { beginAtZero: true, title: { display: true, text: 'N positivos' } }
+            y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'N positivos' } }
         }
     }
 });
@@ -2861,7 +3475,7 @@ new Chart(document.getElementById('g10b'), {
         },
         scales: {
             x: { title: { display: true, text: 'Intensidade' } },
-            y: { beginAtZero: true, title: { display: true, text: 'N positivos' } }
+            y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'N positivos' } }
         }
     }
 });
@@ -2902,7 +3516,7 @@ new Chart(document.getElementById('g11'), {
         responsive: true, maintainAspectRatio: false,
         plugins: {
             legend: { position: 'bottom' },
-            title: { display: true, text: 'Curva ROC dos critérios LAMP (AUC = <?= number_format($auc, 3, ".", "") ?>)' },
+            title: { display: true, text: 'Curva ROC dos critérios LAMP (AUC empírica = <?= number_format($auc, 3, ".", "") ?>)' },
             tooltip: {
                 callbacks: {
                     label: c => {
