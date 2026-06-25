@@ -540,7 +540,9 @@ function mcnemarTest($b, $c) {
     $nd = $b + $c;
     if ($nd === 0) return ['chi2' => 0.0, 'df' => 1, 'p' => 1.0, 'b' => $b, 'c' => $c, 'discordantes' => 0, 'metodo' => '—'];
     if ($nd >= 25) {
-        $chi = pow(abs($b - $c) - 1, 2) / $nd;
+        // Correcao de continuidade de Yates, travada em zero (|b-c|<=1 => chi=0 => p=1)
+        $diff = max(0.0, abs($b - $c) - 1.0);
+        $chi = $diff * $diff / $nd;
         return ['chi2' => $chi, 'df' => 1, 'p' => chiSqSf($chi, 1), 'b' => $b, 'c' => $c, 'discordantes' => $nd, 'metodo' => 'qui-quadrado (corr. continuidade)'];
     }
     $k = min($b, $c); $p = 0.0;
@@ -593,7 +595,7 @@ function logisticFit($X, $y, $maxIter = 50, $tol = 1e-8) {
     for ($i = 0; $i < $n; $i++) { $row = [1.0]; for ($j = 0; $j < $p; $j++) $row[] = ($X[$i][$j] - $mean[$j]) / $sd[$j]; $Z[$i] = $row; }
     $k = $p + 1; $beta = array_fill(0, $k, 0.0); $sumY = array_sum($y);
     if ($sumY <= 0 || $sumY >= $n) return null;
-    $beta[0] = log($sumY / ($n - $sumY)); $cov = null;
+    $beta[0] = log($sumY / ($n - $sumY)); $cov = null; $converged = false;
     for ($iter = 0; $iter < $maxIter; $iter++) {
         $g = array_fill(0, $k, 0.0); $H = array_fill(0, $k, array_fill(0, $k, 0.0));
         for ($i = 0; $i < $n; $i++) {
@@ -608,14 +610,19 @@ function logisticFit($X, $y, $maxIter = 50, $tol = 1e-8) {
         $maxStep = 0.0;
         for ($a = 0; $a < $k; $a++) { $step = 0.0; for ($bb = 0; $bb < $k; $bb++) $step += $Hinv[$a][$bb] * $g[$bb];
             $beta[$a] += $step; $maxStep = max($maxStep, abs($step)); }
-        $cov = $Hinv; if ($maxStep < $tol) break;
+        $cov = $Hinv; if ($maxStep < $tol) { $converged = true; break; }
     }
-    if ($cov === null) return null;
+    if ($cov === null || !$converged) return null;
+    // Guarda contra (quase-)separacao: betas divergentes/nao-finitos invalidam o modelo
+    // (evita OR=INF, que quebraria o json_encode do forest plot e abortaria o <script>)
+    foreach ($beta as $bv) { if (!is_finite($bv) || abs($bv) > 25) return null; }
     $out = [];
     for ($j = 0; $j < $p; $j++) {
         $a = $j + 1; $b = $beta[$a]; $se = sqrt(max(0.0, $cov[$a][$a])); $z = $se > 0 ? $b / $se : 0.0;
+        $or = exp($b); $or_lo = exp($b - 1.959963984540054 * $se); $or_hi = exp($b + 1.959963984540054 * $se);
+        if (!is_finite($or) || !is_finite($or_lo) || !is_finite($or_hi) || !is_finite($se)) return null;
         $out[] = ['beta' => $b, 'se' => $se, 'z' => $z, 'p' => 2.0 * normSf(abs($z)),
-            'or' => exp($b), 'or_lo' => exp($b - 1.959963984540054 * $se), 'or_hi' => exp($b + 1.959963984540054 * $se),
+            'or' => $or, 'or_lo' => $or_lo, 'or_hi' => $or_hi,
             'sd' => $sd[$j], 'mean' => $mean[$j]];
     }
     return ['n' => $n, 'eventos' => (int)$sumY, 'intercept' => $beta[0], 'coef' => $out];
