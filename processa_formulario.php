@@ -262,9 +262,17 @@ function processarColeta($pdo, $dados) {
             // Fazer apenas uma vez por local para evitar requisições duplicadas
             static $locaisProcessados = [];
             if ($animal['latitude'] && $animal['longitude'] && !in_array($animal['local_id'], $locaisProcessados)) {
-                importarDadosClimaticos3MesesAnteriores($pdo, $animal['local_id'], $animal['latitude'], 
-                                                       $animal['longitude'], $dados['data_coleta']);
+                // Marca ANTES da chamada para nao repetir em caso de falha (uma tentativa por local)
                 $locaisProcessados[] = $animal['local_id'];
+                // Caminho legado (OpenWeather/estatisticas_climaticas) e OPCIONAL; o clima oficial
+                // e carregado via NASA POWER (api_clima_pendentes.php). Falha aqui nao deve abortar
+                // nem poluir o registro da coleta, que ja foi inserida acima.
+                try {
+                    importarDadosClimaticos3MesesAnteriores($pdo, $animal['local_id'], $animal['latitude'],
+                                                           $animal['longitude'], $dados['data_coleta']);
+                } catch (Throwable $eClima) {
+                    logErro("Clima legado ignorado p/ local {$animal['local_id']}: " . $eClima->getMessage());
+                }
             }
         } catch (Exception $e) {
             $erros[] = "Erro ao processar animal ID $animalId: " . $e->getMessage();
@@ -660,10 +668,10 @@ function importarDadosClimaticosOpenWeather($pdo, $localId, $latitude, $longitud
             $dadosClima = obterDadosClimaticosAPI($url);
             
             if ($dadosClima) {
-                $query = "INSERT IGNORE INTO dados_climaticos 
-                         (local_id, data_registro, temperatura_media, temperatura_maxima, 
-                          temperatura_minima, pluviometria_mm, umidade_relativa, 
-                          pressao_atmosferica, velocidade_vento, fonte_dados) 
+                $query = "INSERT IGNORE INTO dados_climaticos
+                         (local_id, data_coleta, temperatura_media, temperatura_maxima,
+                          temperatura_minima, pluviometria_total, umidade_media,
+                          pressao_atmosferica, velocidade_vento, fonte_dados)
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OpenWeather API')";
                 
                 $stmt = $pdo->prepare($query);
@@ -730,17 +738,17 @@ function obterDadosClimaticosAPI($url) {
 
 function calcularCorrelacaoClimatica($pdo, $localId, $dataColeta) {
     // Buscar dados climáticos dos 3 meses anteriores
-    $query = "SELECT 
+    $query = "SELECT
                 AVG(temperatura_media) as temp_media_3m,
                 AVG(temperatura_maxima) as temp_max_3m,
                 AVG(temperatura_minima) as temp_min_3m,
-                SUM(pluviometria_mm) as chuva_total_3m,
-                AVG(umidade_relativa) as umidade_media_3m,
+                SUM(pluviometria_total) as chuva_total_3m,
+                AVG(umidade_media) as umidade_media_3m,
                 STDDEV(temperatura_media) as temp_variacao,
-                STDDEV(pluviometria_mm) as chuva_variacao
-              FROM dados_climaticos 
-              WHERE local_id = ? 
-              AND data_registro BETWEEN DATE_SUB(?, INTERVAL 3 MONTH) AND ?";
+                STDDEV(pluviometria_total) as chuva_variacao
+              FROM dados_climaticos
+              WHERE local_id = ?
+              AND data_coleta BETWEEN DATE_SUB(?, INTERVAL 3 MONTH) AND ?";
     
     $stmt = $pdo->prepare($query);
     $stmt->execute([$localId, $dataColeta, $dataColeta]);
