@@ -1,0 +1,144 @@
+# 🧠 Memória do Projeto — Diagnóstico TPB (Tristeza Parasitária Bovina)
+
+> Documento de memória para o agente **professor_tpb** orquestrar análises de dados e
+> melhorias gráficas/estatísticas no futuro. Mantenha este arquivo atualizado a cada
+> mudança relevante (nova tabela, novo gráfico, novo achado de dado, novo commit).
+> **Última atualização:** 2026-06-26.
+
+> **Estado atual (2026-06-26):** `relatorio_cientifico.php` + `processa_formulario.php` (commits
+> até `47f075f`) **publicados na Hostinger** pelo usuário. **Fazenda IFRJ Pinheiral (local 6)
+> resolvida:** coletas registradas via `forms.php` (data 2026-02-23, estação Verão) + carga
+> climática manual rodada → passa a constar em `v_dados_cientificos`. Partir deste estado.
+
+---
+
+## 1. Visão geral
+
+- **Tema:** vigilância epidemiológica de **Tristeza Parasitária Bovina (TPB)** — hemoparasitas em bovinos:
+  - **Babesia bovis** (vetor: carrapato *Rhipicephalus (Boophilus) microplus*)
+  - **Anaplasma marginale** (mesmo vetor + mecânico)
+  - **Trypanosoma vivax** (transmissão mecânica)
+- **Diagnóstico molecular:** PCR convencional + **PCR-LAMP** (alvos *B. bovis*: 18S rRNA e CytB mitocondrial).
+- **Clima:** NASA POWER (T2M, PRECTOTCORR, RH2M) — médias de **90 dias antes da coleta**.
+- **Desenho do estudo:** **4 coletas por ano (1 por estação) × 3 localidades**, **longitudinal** (mesmos animais reamostrados). ⇒ Muitos dados acumulando ao longo dos anos.
+- **Instituição:** IFRJ — LGM (Laboratório de Genética Molecular), Campus Pinheiral / parcerias.
+- **Site público:** `https://www.ifrj-crj-geneticamolecular.online/aplicativos/diagnostico_tpb/`
+  - Página científica: `relatorio_cientifico.php` (protegida por senha).
+
+## 2. Repositórios e branches
+
+| Repo | Branch de trabalho | Conteúdo |
+|---|---|---|
+| `luizdione/app_tpb` | `claude/wizardly-shannon-jvsat7` | App web PHP completo (o que importa para análises) |
+| `luizdione/diagnostic_bovine_parasitic_sadness` | `claude/wizardly-shannon-jvsat7` | Praticamente vazio (LICENSE) |
+
+- **Cópia local do usuário (Windows):** `C:\Users\luizd\OneDrive\Data_Science\Projetos\HTML_LGM\public_html\aplicativos\diagnostico_tpb\`
+- Fluxo: editar no repo → push GitHub → o usuário faz `git pull` (atualiza OneDrive) → deploy Hostinger.
+
+## 3. Banco de dados (MySQL — Hostinger)
+
+- **DB:** `u112348440_ifrj_crj_lgm` (host phpMyAdmin: `auth-db887.hstgr.io`).
+- **Tabelas/views principais:**
+  - `animais` — cadastro base do animal (`id`, `local_id`, `identificacao`, sexo, raça, idade…). **NÃO tem `codigo_animal` nem `data_coleta`.**
+  - `coletas` — **eventos de coleta**, keyed por `animal_id` (`id`, `animal_id`, `local_id` [às vezes NULL!], `data_coleta`, `estacao`, `tipo_amostra`…). **É a base do pipeline científico.**
+  - `dados_climaticos` — clima por coleta. Keyed por `coleta_id` + `local_id`. **Colunas reais:** `temperatura_media/minima/maxima`, `pluviometria_total`, `pluviometria_media`, `umidade_media/minima/maxima`, `pressao_atmosferica`, `velocidade_vento`, `data_coleta`, `data_inicio_periodo`, `data_fim_periodo`, `fonte`/`fonte_dados`, `status`. ⚠️ **Não existe `pluviometria_mm`, `umidade_relativa` nem `data_registro`** (nomes antigos que causaram bug — ver §7).
+  - `animais_completos` — **consolidado** (provável view) com `codigo_animal`, `data_coleta`, `local_id`, `sexo`, `em_lactacao`, `idade_meses_na_coleta`, `pcr_babesia/anaplasma/trypanosoma`, `lamp_babesia_18s/cytb`, `simulacao`. Fonte de *fallback* do relatório.
+  - `v_dados_cientificos` — **view científica oficial** usada pelo relatório. Já: exclui `simulacao=1`, exclui códigos `CLIMA*`/`CLIMA_REF*`, calcula `estacao`/idade, faz **JOIN com `dados_climaticos`** (pode duplicar linhas). Colunas: `codigo_animal`, `data_coleta`, `fazenda`, `municipio`, `estacao`, `sexo`, `em_lactacao`, `idade_meses_na_coleta`, `temperatura_media`, `pluviometria_total`, `umidade_media`, e os 5 flags PCR/LAMP. **Definição em migration `.sql` NÃO versionada (gitignored) — não está no repo.**
+  - `resultados_lamp` — tempos de detecção e intensidade do LAMP (`tempo_deteccao_18s_min`, `intensidade_sinal_18s`, idem cytb).
+  - `locais` — `id`, `nome`, `municipio`, `ativo`, `latitude`, `longitude`.
+  - `estatisticas_climaticas` — tabela auxiliar do caminho **legado** (pode não existir/estar em desuso).
+- **Locais conhecidos:** `5` = Fazenda Pesagro (Seropédica) · `6` = **Fazenda IFRJ Pinheiral** (Pinheiral) · `8` = Fazenda Quintas Barbosa (Japeri) · `20` = Sorriso (simulado/demonstração).
+- **Pipeline de dados (CRÍTICO entender):**
+  ```
+  formulário → animais + coletas → carga clima NASA (api_clima_pendentes.php, lê FROM coletas)
+            → dados_climaticos → v_dados_cientificos → relatorio_cientifico.php
+  ```
+  Uma fazenda só aparece nas análises se tiver linhas em **`coletas`** (e, dependendo do JOIN da view, também em `dados_climaticos`).
+
+## 4. Arquivos-chave do app
+
+| Arquivo | Papel |
+|---|---|
+| `relatorio_cientifico.php` | **Relatório científico** (tabelas + ~14 gráficos Chart.js/canvas + biblioteca estatística). Foco das melhorias. |
+| `dashboard.php` | Dashboard interativo público (mapas Leaflet, correlações). |
+| `forms.php` | Entrada de dados (abas: Locais, **Coletas/Amostras**, PCR-LAMP, Clima). |
+| `processa_formulario.php` | Processa submissões do `forms.php` (INSERT animais/coletas/resultados; import clima legado). |
+| `manutencao.php` | Manutenção, QA, carga de clima, sync Hostinger. |
+| `api_clima_pendentes.php` | **Carga de clima oficial (NASA POWER)** — lê coletas sem clima e busca. ✅ funciona. |
+| `api_clima*.php` | APIs de clima diversas (grid, semanal, mapa). |
+| `api_correlacao.php` | Correlação clima×diagnóstico (usa `animais_completos`, `?cientifico=1`). |
+| `ajuda_tutoriais/09_filtro_cientifico.md` | Doc do filtro científico (simulacao/CLIMA, view). |
+| `AUDITORIA_MELHORIAS_TPB.md` | **Roadmap** de melhorias gráficas/analíticas com bibliografia (ver §8). |
+| `static/js/chart.umd.min.js` | Chart.js v4. `static/js/leaflet.js` + `static/css/leaflet.css`. |
+
+- **Filtro científico:** view `v_dados_cientificos` (recomendado) · helper `filtroCientifico()` + `?cientifico=1` · view agregada `v_prevalencia_resumo`.
+- **Config/segredos (gitignored):** `config.php` (getDBConnection, verificarSenhaAjuda, setSecurityHeaders, isDevAmbiente, filtroCientifico), `sync_hostinger.env`, etc.
+
+## 5. Deploy (importante!)
+
+- **GitHub** é o canal confiável: tudo vai para a branch de trabalho.
+- **Hostinger** é deploy **manual do usuário**: `sincronizar_hostinger.bat` (WinSCP, sobe `*.php`) **ou** Gerenciador de Arquivos web. Sobe só `.php` (os `.md` ficam só no git).
+- ⚠️ **O ambiente remoto do Claude Code NÃO alcança a Hostinger** (proxy retorna **403** para `*.hstgr.io` e para o site público). Portanto: **não dá para fazer deploy nem ler o banco de produção a partir daqui.** Diagnóstico de banco é feito **passando SQL para o usuário rodar no phpMyAdmin**.
+- **Não tocar no banco de produção** sem necessidade; preferir correções no app + SQL revisado pelo usuário.
+
+## 6. Biblioteca estatística (PHP puro) — em `relatorio_cientifico.php`
+
+Validada com **45 testes** contra valores de referência (ver §9). Funções disponíveis:
+- Distribuições: `normCdf`, `normSf`, `chiSqSf`, `studentTwoSided`, `betai`, `gammp`/`gammq` (Numerical Recipes).
+- Testes: `wilson95` (IC proporção), `spearmanInfer` (ρ → p + IC95% Fisher z), `chiSquareTest` (independência r×c), `mcnemarTest` (pareado: exato <25 / Yates ≥25, **travado em zero p/ |b−c|≤1**), `kappaCI` (κ de Cohen + IC95%), AUC Hanley–McNeil.
+- Modelagem: `logisticFit` (regressão logística IRLS multivariável, padronizada → OR por +1 DP, com **guarda de convergência/separação** ⇒ retorna null se diverge), `olsWeighted` (tendência ponderada), `matInverse`.
+- Formatação: `niceMax` (teto de eixo agradável), `fmt_p`/`fmt_pclause` (p-valor HTML-safe), `fmt_pct`/`fmt_ci`/`fmt_num`, `notaCorr`.
+
+## 7. Histórico de versionamento (commits desta linha de trabalho)
+
+| Hash | Data | Resumo |
+|---|---|---|
+| `f2aace3` | 2026-06-17 | Versiona app (gitignore allowlist/denylist; exclui segredos/dumps). |
+| `3622bf0` | 2026-06-25 | **Relatório:** estatística inferencial + integração clima→epidemiologia (logística multivariável + forest plot g13 + Spearman por patógeno) + correções gráficas (eixos dinâmicos g1/g2/g4-6, histograma g10a com bins compartilhados, McNemar/κ-CI/χ² sazonal, IC da AUC). |
+| `0ab8511` | 2026-06-25 | **Correção (revisão adversarial):** McNemar trava `|b−c|−1` em zero (p=1 quando b=c); regressão logística ganha guarda de separação/convergência (evitava OR=∞ → `json_encode` falho → JS quebrado). |
+| `ef2e1d9` | 2026-06-25 | Adiciona `AUDITORIA_MELHORIAS_TPB.md` (bibliografia + roadmap). |
+| `4ff79e2` | 2026-06-25 | Gráficos de clima (g4-g6): eixo Y travado em ≤100% com folga (reta de tendência recortada). |
+| `47f075f` | 2026-06-26 | Corrige import de clima legado (`pluviometria_mm`→`pluviometria_total`, `umidade_relativa`→`umidade_media`, `data_registro`→`data_coleta`) + try/catch no `processa_formulario.php`. |
+
+## 8. Gráficos atuais do relatório (mapa rápido)
+
+- **g1** prevalência por fazenda × parasita (barras + IC95% Wilson, eixo Y dinâmico).
+- **g2** prevalência por estação (linha, eixo Y dinâmico) + **χ² sazonal**.
+- **g3** rosca: nº animais por fazenda.
+- **g4/g5/g6** clima × prevalência (scatter: pontos ∝ n, IC Wilson, **reta de tendência OLS**, ρ+IC+p; eixo Y ≤100%).
+- **g7a/g7b** comparação PCR vs LAMP (positivos por método; concordância) + **McNemar + κ com IC95%**.
+- **g8** coinfecção (UpSet-like, B. bovis × A. marginale × T. vivax).
+- **g9a/g9b** estados longitudinais + distribuição de amostras por animal.
+- **g10a/g10b** tempo de detecção LAMP (histograma **bins compartilhados**) + intensidade.
+- **g11** curva ROC dos critérios LAMP (AUC empírica + IC Hanley–McNeil).
+- **g12** heatmap κ 5×5 (canvas custom).
+- **g13** **forest plot** dos OR do modelo logístico clima→infecção (canvas custom, escala log, linha OR=1).
+- **heatmap_temporal** clima semanal por fazenda (canvas custom, NASA, auto-carga).
+
+## 9. Problemas conhecidos, convenções e gotchas
+
+- **Prevalência baixa** (TPB costuma ser <30%): nunca fixar eixo Y em 100 — usar `niceMax`/teto dinâmico.
+- **Colinearidade climática:** com poucos timepoints (4 estações), temperatura/pluviometria/umidade têm ranks quase idênticos ⇒ **ρ de Spearman iguais** nos 3 gráficos (não é bug). O **modelo logístico multivariável** é a leitura correta para separar efeitos.
+- **EPV baixo no início:** logística é exploratória; pode haver **separação** (especialmente *T. vivax*, raro) ⇒ a função retorna null e a seção mostra "modelo não estimado" (futuro: correção de Firth).
+- **Fazenda some das análises:** se a fazenda não tem linhas em **`coletas`** (e/ou sem clima), ela **não aparece** na view. Foi o caso de **Pinheiral** (animais em `animais_completos` mas 0 em `coletas`; resolvido registrando coletas pelo `forms.php`). Diagnóstico padrão: comparar `locais` × `v_dados_cientificos` (GROUP BY fazenda) × `coletas` (via `animal_id`) × `dados_climaticos`.
+- **`coletas.local_id` pode ser NULL** — vincular sempre por `animal_id → animais.local_id` (o pipeline usa `COALESCE(a.local_id, c.local_id)`).
+- **Datas plurianuais:** já há coletas em **2026** (ex.: Pinheiral 2026-02-23). Qualquer filtro de ano fixo em 2025 na view excluiria 2026 — atenção ao revisar a definição da view.
+- **Fragilidade da view:** o `JOIN` com `dados_climaticos` pode apagar fazendas sem clima. Melhoria pendente: trocar por **`LEFT JOIN`** (precisa do texto da view via Exportar do phpMyAdmin). Itens sem clima ficam fora só da *correlação climática*.
+- **Sem banco no ambiente Claude:** validar PHP com `php -l`; renderizar com **mock PDO** (`config.php` falso + `FakePDO`) + `php` CLI; conferir gráficos com **Playwright** (Chromium em `/opt/pw-browsers/chromium-1194/...`, usar proxy). Math validada por testes unitários isolados.
+- **Segurança:** links de phpMyAdmin / Gerenciador de Arquivos compartilhados são sessões temporárias → recomendar **rotacionar credenciais** após uso. Nunca commitar segredos (gitignore já bloqueia `config*.php`, `*.env`, dumps `*.sql`).
+- **Identidade do modelo / co-autoria:** commits terminam com `Co-Authored-By: Claude Opus 4.8` + `Claude-Session`. Não colocar o identificador do modelo em código/PR/commits além disso.
+
+## 10. Roadmap de melhorias (ver `AUDITORIA_MELHORIAS_TPB.md` para detalhes + citações)
+
+**Viáveis agora (com 4 estações × 3 fazendas):** paleta CVD-safe (Okabe-Ito); IC95% do κ **dentro do heatmap** g12; tabela 2×2 do McNemar como achado biológico (portador subpatente); **lasagna plot** longitudinal por animal; **Sankey/alluvial** das transições; diagrama de **nicho climático** (T×UR×prevalência); **déficit de saturação (VPD)** como preditor mecânico; box/violino para tempo LAMP; forest plot de prevalência por teste; spaghetti + small multiples; legendas STROBE-Vet.
+
+**Destravam com mais coletas (vários ciclos):** cross-correlation com **lag** por patógeno; **STL/MSTL** (decomposição sazonal); **GLMM/GEE** (fazenda fixa / animal aleatório); **Markov multi-estado**; **estabilidade enzoótica** (taxa de inoculação h, prevalência por idade); mapas de risco; projeções climáticas (MaxEnt/ensemble); correção de Firth; ROC com banda IC95%.
+
+## 11. Como o professor_tpb deve trabalhar (protocolo)
+
+1. **Ler esta memória primeiro** + `AUDITORIA_MELHORIAS_TPB.md` quando o pedido for de melhoria.
+2. Trabalhar SEMPRE na branch `claude/wizardly-shannon-jvsat7`; commitar com mensagens claras e atualizar a tabela §7 + esta memória.
+3. **Validar antes de versionar:** `php -l`; quando mexer em estatística, escrever/rodar testes; quando mexer em gráfico, renderizar com mock + screenshot.
+4. **Banco:** nunca assumir nomes de coluna — confirmar via `SHOW COLUMNS`/`information_schema`; entregar SQL para o usuário rodar (o ambiente não alcança a Hostinger).
+5. **Deploy:** lembrar o usuário que a Hostinger é manual (push → pull → `sincronizar_hostinger.bat`/Gerenciador).
+6. Ser honesto sobre limitações estatísticas (poucas fazendas, EPV baixo, colinearidade) e não superinterpretar.
