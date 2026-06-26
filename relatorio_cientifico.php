@@ -1523,10 +1523,11 @@ $testes5 = [
     'lamp_cyt' => ['col'=>'lamp_babesia_cytb','rotulo'=>'LAMP CytB'],
 ];
 $keysT = array_keys($testes5);
-$matrizK = []; // [linha][coluna] = kappa
+$matrizK   = []; // [linha][coluna] = kappa (ponto)
+$matrizKci = []; // [linha][coluna] = ['lo'=>, 'hi'=>] (IC95% assintotico; null na diagonal/sem variancia)
 foreach ($keysT as $k1) {
     foreach ($keysT as $k2) {
-        if ($k1 === $k2) { $matrizK[$k1][$k2] = 1.0; continue; }
+        if ($k1 === $k2) { $matrizK[$k1][$k2] = 1.0; $matrizKci[$k1][$k2] = null; continue; }
         $a=0;$b=0;$c=0;$d=0;
         foreach ($rowsCo as $r) {
             $v1 = (int)($r[$testes5[$k1]['col']] ?? 0);
@@ -1537,6 +1538,11 @@ foreach ($keysT as $k1) {
             else                $d++;
         }
         $matrizK[$k1][$k2] = cohenKappa($a,$b,$c,$d);
+        // IC95% do kappa pela formula assintotica (kappaCI ja existe e e validada)
+        $ci = kappaCI($a,$b,$c,$d);
+        $matrizKci[$k1][$k2] = ($ci['kappa'] !== null && $ci['lo'] !== null)
+            ? ['lo' => round($ci['lo'], 3), 'hi' => round($ci['hi'], 3)]
+            : null;
     }
 }
 
@@ -2464,6 +2470,9 @@ $temAnyEst = !empty($estPrev);
   Valores altos entre <b>PCR B. bovis × LAMP 18S/CytB</b> indicam que o LAMP reproduz bem o PCR
   para o mesmo alvo. Valores altos entre <b>parasitas distintos</b> (ex.: PCR B. bovis × PCR A. marginale)
   sinalizam coinfecção sistemática (relevante epidemiologicamente).
+  Cada célula mostra o κ pontual e, na 2ª linha, o seu <b>IC95%</b> (assintótico) — passe o mouse
+  para o intervalo detalhado. Com poucos eventos, ICs largos (podendo cruzar 0) são esperados e
+  devem ser lidos como incerteza, não como ausência de concordância.
 </p>
 
 <h3 style="color:#1F4E78;">Tabela 10 - Matriz de κ Cohen entre os 5 testes</h3>
@@ -3563,9 +3572,18 @@ Chart.register(rocLabelPlugin);
 // =================================================================
 // ITEM 10 - GRAFICO 12: Heatmap kappa 5x5 (canvas custom)
 // =================================================================
-const matrizK = <?= json_encode($matrizK) ?>;
+const matrizK   = <?= json_encode($matrizK) ?>;
+const matrizKci = <?= json_encode($matrizKci) ?>;
 const rotulosK = <?= json_encode(array_map(fn($k)=>$testes5[$k]['rotulo'], $keysT)) ?>;
 const keysK    = <?= json_encode($keysT) ?>;
+// Geometria do heatmap kappa (preenchida no render; usada pelo hit-test do tooltip)
+let _g12geo = null;
+
+// Formata o IC95% do kappa para exibicao com virgula decimal
+function fmtKci(ci) {
+    if (!ci || ci.lo == null) return null;
+    return '[' + ci.lo.toFixed(2).replace('.', ',') + '; ' + ci.hi.toFixed(2).replace('.', ',') + ']';
+}
 
 function renderHeatmapKappa() {
     const canvas = document.getElementById('g12');
@@ -3579,6 +3597,7 @@ function renderHeatmapKappa() {
     const n = keysK.length;
     const cellW = (W - padLeft - padRight) / n;
     const cellH = (H - padTop - padBottom) / n;
+    _g12geo = { padTop, padLeft, padRight, padBottom, cellW, cellH, n };
 
     ctx.clearRect(0,0,W,H);
     ctx.fillStyle = '#fff'; ctx.fillRect(0,0,W,H);
@@ -3613,16 +3632,27 @@ function renderHeatmapKappa() {
     for (let i = 0; i < n; i++) {
         for (let j = 0; j < n; j++) {
             const v = matrizK[keysK[i]][keysK[j]];
+            const ci = matrizKci[keysK[i]][keysK[j]];
             const x = padLeft + j*cellW, y = padTop + i*cellH;
             ctx.fillStyle = corKappa(v);
             ctx.fillRect(x, y, cellW - 1, cellH - 1);
             ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
             ctx.strokeRect(x, y, cellW - 1, cellH - 1);
-            // Valor texto
-            ctx.fillStyle = (v != null && v > 0.5) ? '#fff' : '#222';
+            const corTxt = (v != null && v > 0.5) ? '#fff' : '#222';
+            const ciTxt = fmtKci(ci);
+            // Valor pontual do kappa
+            ctx.fillStyle = corTxt;
             ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
             const txt = v != null ? v.toFixed(2).replace('.',',') : '-';
-            ctx.fillText(txt, x + cellW/2, y + cellH/2 + 4);
+            // Se ha IC para desenhar, sobe o ponto para abrir espaco para a 2a linha
+            const dyVal = ciTxt ? -4 : 4;
+            ctx.fillText(txt, x + cellW/2, y + cellH/2 + dyVal);
+            // 2a linha: IC95% abreviado (fora da diagonal)
+            if (ciTxt) {
+                ctx.font = '9px sans-serif';
+                ctx.fillStyle = (v != null && v > 0.5) ? 'rgba(255,255,255,0.85)' : '#555';
+                ctx.fillText(ciTxt, x + cellW/2, y + cellH/2 + 12);
+            }
         }
     }
     // Legenda colorbar
@@ -3641,7 +3671,54 @@ function renderHeatmapKappa() {
     ctx.textAlign = 'right';
     ctx.fillText('κ = 1', legX + legW, legY - 2);
 }
-document.addEventListener('DOMContentLoaded', renderHeatmapKappa);
+
+// Tooltip por hover no heatmap kappa (hit-test pela geometria _g12geo)
+function setupHeatmapKappaTooltip() {
+    const canvas = document.getElementById('g12');
+    if (!canvas) return;
+    let tip = document.getElementById('g12-tip');
+    if (!tip) {
+        tip = document.createElement('div');
+        tip.id = 'g12-tip';
+        tip.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;display:none;'
+            + 'background:#1F4E78;color:#fff;padding:6px 9px;border-radius:5px;font-size:12px;'
+            + 'box-shadow:0 2px 8px rgba(0,0,0,.25);max-width:240px;line-height:1.35;';
+        document.body.appendChild(tip);
+    }
+    function celulaEm(ev) {
+        if (!_g12geo) return null;
+        const rect = canvas.getBoundingClientRect();
+        // canvas.width pode diferir do tamanho CSS (devicePixelRatio); escalar
+        const sx = canvas.width  / rect.width;
+        const sy = canvas.height / rect.height;
+        const cx = (ev.clientX - rect.left) * sx;
+        const cy = (ev.clientY - rect.top)  * sy;
+        const g = _g12geo;
+        const j = Math.floor((cx - g.padLeft) / g.cellW);
+        const i = Math.floor((cy - g.padTop)  / g.cellH);
+        if (i < 0 || j < 0 || i >= g.n || j >= g.n) return null;
+        return { i, j };
+    }
+    canvas.addEventListener('mousemove', (ev) => {
+        const cel = celulaEm(ev);
+        if (!cel) { tip.style.display = 'none'; return; }
+        const { i, j } = cel;
+        const v  = matrizK[keysK[i]][keysK[j]];
+        const ci = matrizKci[keysK[i]][keysK[j]];
+        const kTxt = (v != null) ? v.toFixed(3).replace('.', ',') : '—';
+        const ciTxt = fmtKci(ci);
+        let html = '<b>' + rotulosK[i] + ' × ' + rotulosK[j] + '</b><br>κ = ' + kTxt;
+        if (i === j) html += ' <span style="opacity:.8">(auto-concordância)</span>';
+        else if (ciTxt) html += '<br>IC95% ' + ciTxt;
+        tip.innerHTML = html;
+        tip.style.display = 'block';
+        tip.style.left = (ev.clientX + 14) + 'px';
+        tip.style.top  = (ev.clientY + 14) + 'px';
+    });
+    canvas.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+}
+
+document.addEventListener('DOMContentLoaded', () => { renderHeatmapKappa(); setupHeatmapKappaTooltip(); });
 window.addEventListener('resize', () => { setTimeout(renderHeatmapKappa, 100); });
 
 
