@@ -2570,7 +2570,14 @@ $temAnyEst = !empty($estPrev);
 
 <div class="chart-wrap">
   <h3>Gráfico 11 - Curva ROC dos critérios LAMP</h3>
-  <div style="height:380px"><canvas id="g11"></canvas></div>
+  <div style="height:440px"><canvas id="g11"></canvas></div>
+  <p class="nota" style="font-size:.85em;color:#444;line-height:1.5;">
+    Eixo X = <b>1 − especificidade</b> (taxa de falsos positivos); eixo Y = <b>sensibilidade</b>
+    (taxa de verdadeiros positivos). A <b>diagonal tracejada</b> representa o acaso (AUC = 0,5).
+    Cada ponto é um critério de positividade do LAMP — quanto <b>mais próximo do canto
+    superior-esquerdo</b>, melhor o critério (alta sensibilidade com poucos falsos positivos).
+    Os critérios são identificados por cor e forma na legenda (passe o mouse para os valores).
+  </p>
   <div class="chart-actions">
     <button class="btn-dl" onclick="baixarGrafico('g11','Grafico11_ROC_LAMP')">
       <svg viewBox="0 0 24 24"><path d="M5 3v18h14V3H5z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
@@ -2914,15 +2921,17 @@ function corrChart(canvasId, eixoX, dataObj, cor) {
     // Limites de eixo dinamicos (evita Y fixo em 100 e X mal escalado)
     const xs   = pts.map(p => p.x);
     const hiAr = (dataObj.errs || []).map(e => e.hi);
+    // yPeak ja inclui o IC superior (Wilson) de cada bin
     const yPeak = Math.max(...pts.map(p => p.y), ...(hiAr.length ? hiAr : [0]));
     const xmin = Math.min(...xs), xmax = Math.max(...xs);
     const xpad = (xmax - xmin) * 0.08 || 1;
     const maxN = Math.max(...pts.map(p => p.n || 1), 1);
-    const niceY = m => { if (m <= 0) return 10; const t = m * 1.12;
-        for (const c of [5,10,15,20,25,30,40,50,60,70,80,90,100]) if (c >= t) return c; return 100; };
-    // Teto travado em <=100% com folga; a reta de tendencia eh recortada pelo grafico
-    // (antes podia esticar o eixo ate 120%, deixando os pontos colados no topo)
-    const yMax = Math.min(100, niceY(yPeak));
+    const niceY = m => { if (m <= 0) return 10; const t = m * 1.1;
+        for (const c of [5,10,15,20,25,30,40,50,60,70,80,90,100,105,110,115]) if (c >= t) return c; return 115; };
+    // Teto dinamico: prevalencia baixa -> teto justo (<100); quando o pico (incluindo o
+    // IC95% superior) encosta em 100, abre folga ate ~115 para o whisker superior aparecer
+    // inteiro. A reta de tendencia continua RECORTADA (nao estica o eixo, pois yPeak ignora a trend).
+    const yMax = Math.min(115, niceY(yPeak));
 
     const datasets = [{
         label: eixoX,
@@ -3336,7 +3345,8 @@ const g7a_data = {
         data: [<?= $nPCR ?>, <?= $nLAMP18S ?>, <?= $nLAMPCytB ?>],
         backgroundColor: ['#C0504D', '#9BBB59', '#F79646'],
         borderColor: ['#8B0000', '#5C7A2D', '#B85C00'],
-        borderWidth: 1.5
+        borderWidth: 1.5,
+        maxBarThickness: 56, categoryPercentage: 0.6, barPercentage: 0.8
     }]
 };
 new Chart(document.getElementById('g7a'), {
@@ -3506,7 +3516,8 @@ new Chart(document.getElementById('g9a'), {
             label: labelsEstado[i],
             data: [estadosBB[k], estadosAM[k], estadosTV[k]],
             backgroundColor: cmapEstado[i],
-            borderColor: '#fff', borderWidth: 1
+            borderColor: '#fff', borderWidth: 1,
+            maxBarThickness: 64
         }))
     },
     options: {
@@ -3516,7 +3527,7 @@ new Chart(document.getElementById('g9a'), {
             title: { display: true, text: '(A) Estados longitudinais por animal (N=<?= $nAnimaisLongi ?>)' }
         },
         scales: {
-            x: { stacked: true },
+            x: { stacked: true, categoryPercentage: 0.6 },
             y: { stacked: true, beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'N animais' } }
         }
     }
@@ -3532,7 +3543,8 @@ new Chart(document.getElementById('g9b'), {
             label: 'N animais',
             data: Object.values(distNCol),
             backgroundColor: '#2E75B6',
-            borderColor: '#1F4E78', borderWidth: 1
+            borderColor: '#1F4E78', borderWidth: 1,
+            maxBarThickness: 56, categoryPercentage: 0.6, barPercentage: 0.8
         }]
     },
     options: {
@@ -3741,44 +3753,46 @@ new Chart(document.getElementById('g10b'), {
 // ITEM 9 - GRAFICO 11: Curva ROC dos LAMPs
 // =================================================================
 const rocPontos = <?= json_encode([
-    'so_18s'  => ['x'=>1-$roc['so_18s']['spec'],  'y'=>$roc['so_18s']['sens'],  'rotulo'=>'só 18S'],
-    'so_cytb' => ['x'=>1-$roc['so_cytb']['spec'], 'y'=>$roc['so_cytb']['sens'], 'rotulo'=>'só CytB'],
-    'or'      => ['x'=>1-$roc['or']['spec'],      'y'=>$roc['or']['sens'],      'rotulo'=>'OR (união)'],
-    'and'     => ['x'=>1-$roc['and']['spec'],     'y'=>$roc['and']['sens'],     'rotulo'=>'AND (intersecção)'],
+    'so_18s'  => ['x'=>1-$roc['so_18s']['spec'],  'y'=>$roc['so_18s']['sens'],  'rotulo'=>'só 18S',            'cor'=>'#E69F00'],
+    'so_cytb' => ['x'=>1-$roc['so_cytb']['spec'], 'y'=>$roc['so_cytb']['sens'], 'rotulo'=>'só CytB',           'cor'=>'#56B4E9'],
+    'or'      => ['x'=>1-$roc['or']['spec'],      'y'=>$roc['or']['sens'],      'rotulo'=>'OR (união)',        'cor'=>'#009E73'],
+    'and'     => ['x'=>1-$roc['and']['spec'],     'y'=>$roc['and']['sens'],     'rotulo'=>'AND (intersecção)', 'cor'=>'#CC79A7'],
 ]) ?>;
+
+// Um dataset por criterio (cor distinta -> identificado pela legenda; sem rotulos
+// inline sobrepostos). Marcadores com forma distinta reforcam a leitura CVD-safe.
+const rocFormas = { 'so_18s':'circle', 'so_cytb':'triangle', 'or':'rect', 'and':'rectRot' };
+const rocDatasets = Object.entries(rocPontos).map(([k, p]) => ({
+    label: p.rotulo,
+    data: [{x: p.x, y: p.y, rotulo: p.rotulo}],
+    backgroundColor: p.cor,
+    borderColor: '#333', borderWidth: 1,
+    pointStyle: rocFormas[k] || 'circle',
+    pointRadius: 10, pointHoverRadius: 13,
+    showLine: false
+}));
+rocDatasets.push({
+    label: 'Diagonal (acaso, AUC=0,5)',
+    data: [{x:0,y:0},{x:1,y:1}],
+    backgroundColor: 'transparent', borderColor: '#999',
+    borderDash: [6, 4], borderWidth: 1.5,
+    pointStyle: false, pointRadius: 0, showLine: true, fill: false
+});
 
 new Chart(document.getElementById('g11'), {
     type: 'scatter',
-    data: {
-        datasets: [
-            {
-                label: 'Critérios LAMP',
-                data: Object.values(rocPontos).map(p => ({x: p.x, y: p.y, rotulo: p.rotulo})),
-                backgroundColor: '#C0504D',
-                borderColor: '#8B0000',
-                pointRadius: 9, pointHoverRadius: 11,
-                showLine: false
-            },
-            {
-                label: 'Diagonal (acaso)',
-                data: [{x:0,y:0},{x:1,y:1}],
-                backgroundColor: 'transparent', borderColor: '#999',
-                borderDash: [6, 4], borderWidth: 1.5,
-                pointRadius: 0, showLine: true, fill: false
-            }
-        ]
-    },
+    data: { datasets: rocDatasets },
     options: {
         responsive: true, maintainAspectRatio: false,
         plugins: {
-            legend: { position: 'bottom' },
+            legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 10, font: { size: 11 } } },
             title: { display: true, text: 'Curva ROC dos critérios LAMP (AUC empírica = <?= number_format($auc, 3, ".", "") ?>)' },
             tooltip: {
                 callbacks: {
                     label: c => {
                         if (c.dataset.label.includes('Diagonal')) return `(${c.parsed.x.toFixed(2)}, ${c.parsed.y.toFixed(2)})`;
                         const r = c.raw;
-                        return `${r.rotulo}: sensib=${(r.y*100).toFixed(1)}%, 1-espec=${(r.x*100).toFixed(1)}%`;
+                        return `${r.rotulo}: sensib=${(r.y*100).toFixed(1)}%, 1−espec=${(r.x*100).toFixed(1)}%`;
                     }
                 }
             }
@@ -3789,23 +3803,6 @@ new Chart(document.getElementById('g11'), {
         }
     }
 });
-// Plugin custom para rotular os pontos da ROC
-const rocLabelPlugin = {
-    id: 'rocLabels',
-    afterDatasetsDraw(chart) {
-        if (chart.canvas.id !== 'g11') return;
-        const ctx = chart.ctx;
-        const meta = chart.getDatasetMeta(0);
-        meta.data.forEach((pt, i) => {
-            const r = chart.data.datasets[0].data[i];
-            ctx.save();
-            ctx.fillStyle = '#1F4E78'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'left';
-            ctx.fillText(r.rotulo, pt.x + 12, pt.y - 4);
-            ctx.restore();
-        });
-    }
-};
-Chart.register(rocLabelPlugin);
 
 // =================================================================
 // ITEM 10 - GRAFICO 12: Heatmap kappa 5x5 (canvas custom)
