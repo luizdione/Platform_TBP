@@ -908,8 +908,16 @@ $parasitas = [
     'pos_lamp_18s'        => 'LAMP 18S',
     'pos_lamp_cytb'       => 'LAMP CytB',
 ];
-$cores = ['#1F4E78','#C0504D','#9BBB59','#F79646','#8064A2'];
+// Paleta Okabe-Ito (CVD-safe, Wong B. Nat Methods 2011) — distinguivel em
+// protanopia/deuteranopia/tritanopia. Item 1 do roadmap (AUDITORIA sec.5.2).
+$OKABE_ITO = ['#E69F00','#56B4E9','#009E73','#F0E442','#0072B2','#D55E00','#CC79A7'];
+$cores = $OKABE_ITO; // alias: consumidores existentes (g1, g2) indexam $cores[$ci%5]
 
+// Borda mais escura para cores claras (amarelo Okabe-Ito #F0E442) — garante
+// contorno visivel da barra/linha sobre fundo branco. Demais cores: usa a propria.
+function corBorda($hex) {
+    return strtoupper($hex) === '#F0E442' ? '#B59E00' : $hex;
+}
 $g1_labels = array_column($prev, 'fazenda');
 $g1_datasets = []; $ci=0; $g1_allHi = [];
 foreach ($parasitas as $col => $nome) {
@@ -922,7 +930,7 @@ foreach ($parasitas as $col => $nome) {
         $g1_allHi[] = $hi;
     }
     $g1_datasets[] = ['label'=>$nome,'data'=>$values,'errs'=>$errs,
-        'backgroundColor'=>$cores[$ci%5].'cc','borderColor'=>$cores[$ci%5],'borderWidth'=>1];
+        'backgroundColor'=>$cores[$ci%5].'cc','borderColor'=>corBorda($cores[$ci%5]),'borderWidth'=>1];
     $ci++;
 }
 // Eixo Y dinamico: teto agradavel acima do maior IC superior (evita barras minusculas)
@@ -936,8 +944,8 @@ foreach ($parasitas as $col => $nome) {
         $v = $n>0 ? round(100.0*$k/$n,2) : 0;
         $values[] = $v; $g2_allVals[] = $v;
     }
-    $g2_datasets[] = ['label'=>$nome,'data'=>$values,'borderColor'=>$cores[$ci%5],
-        'backgroundColor'=>$cores[$ci%5].'33','tension'=>0.25,'fill'=>false,
+    $g2_datasets[] = ['label'=>$nome,'data'=>$values,'borderColor'=>corBorda($cores[$ci%5]),
+        'backgroundColor'=>corBorda($cores[$ci%5]).'33','tension'=>0.25,'fill'=>false,
         'pointRadius'=>4,'pointHoverRadius'=>6,'borderWidth'=>2.2];
     $ci++;
 }
@@ -3374,7 +3382,9 @@ const estadosBB = <?= json_encode($estadoBB) ?>;
 const estadosAM = <?= json_encode($estadoAM) ?>;
 const estadosTV = <?= json_encode($estadoTV) ?>;
 const labelsEstado = ['Coleta única','Sempre negativo','Sempre positivo','Soroconversor','Aclarado','Oscilante'];
-const cmapEstado = ['#bbb','#9BBB59','#C0504D','#2E75B6','#8064A2','#F79646'];
+// Okabe-Ito (CVD-safe). Coleta unica = cinza neutro (proposital).
+// Estados em cores fortes; amarelo (#F0E442) evitado como fundo de barra (baixo contraste).
+const cmapEstado = ['#bbb','#009E73','#D55E00','#0072B2','#56B4E9','#CC79A7'];
 const keysEstado = ['unica_coleta','sempre_neg','sempre_pos','soroconv','aclarado','oscilante'];
 
 new Chart(document.getElementById('g9a'), {
