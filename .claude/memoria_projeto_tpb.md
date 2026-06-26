@@ -99,6 +99,9 @@ Validada com **45 testes** contra valores de referência (ver §9). Funções di
 | `ef2e1d9` | 2026-06-25 | Adiciona `AUDITORIA_MELHORIAS_TPB.md` (bibliografia + roadmap). |
 | `4ff79e2` | 2026-06-25 | Gráficos de clima (g4-g6): eixo Y travado em ≤100% com folga (reta de tendência recortada). |
 | `47f075f` | 2026-06-26 | Corrige import de clima legado (`pluviometria_mm`→`pluviometria_total`, `umidade_relativa`→`umidade_media`, `data_registro`→`data_coleta`) + try/catch no `processa_formulario.php`. |
+| `6538fd9` | 2026-06-26 | **Roadmap item 2:** IC95% do κ no heatmap g12 — nova `$matrizKci` (via `kappaCI()`), 2ª linha `[lo; hi]` por célula + tooltip por hover (hit-test `_g12geo`). Não toca Tabela 10. |
+| `549da03` | 2026-06-26 | **Roadmap item 1:** paleta **Okabe-Ito** (CVD-safe) — `$OKABE_ITO`/`$cores` (g1, g2) + `cmapEstado` (g9a, cinza p/ "coleta única"); helper `corBorda()` escurece o amarelo `#F0E442`→`#B59E00` (borda/linha) p/ contraste. |
+| `e23e46b` | 2026-06-26 | **Roadmap item 3:** novo **lasagna plot g9c** (linha=animal, coluna=onda estação×ano, cor=status). `$sqlCo` ganha `MAX(estacao)`; `$animais` guarda estacao/ano/fazenda (helper `estacaoDeData()` p/ fallback); render canvas custom `renderLasagna()` + tooltip. ⚠️ `$sqlCo` alimenta g8 e g12 — re-testados, intactos. |
 
 ## 8. Gráficos atuais do relatório (mapa rápido)
 
@@ -107,13 +110,17 @@ Validada com **45 testes** contra valores de referência (ver §9). Funções di
 - **g3** rosca: nº animais por fazenda.
 - **g4/g5/g6** clima × prevalência (scatter: pontos ∝ n, IC Wilson, **reta de tendência OLS**, ρ+IC+p; eixo Y ≤100%).
 - **g7a/g7b** comparação PCR vs LAMP (positivos por método; concordância) + **McNemar + κ com IC95%**.
-- **g8** coinfecção (UpSet-like, B. bovis × A. marginale × T. vivax).
-- **g9a/g9b** estados longitudinais + distribuição de amostras por animal.
+- **g8** coinfecção (UpSet-like, B. bovis × A. marginale × T. vivax). ⚠️ cores hardcoded próprias (não usa `$cores`; ainda não-Okabe-Ito).
+- **g9a/g9b** estados longitudinais (g9a usa `cmapEstado` Okabe-Ito) + distribuição de amostras por animal.
+- **g9c** **lasagna plot** longitudinal por animal (canvas custom): linha=animal (agrupado por fazenda, ordenado por nº ondas+), coluna=onda (estação×ano), cor=status (negativo/B.bovis/A.marginale/T.vivax/coinfecção/ausente, Okabe-Ito). Tooltip por hover. **Preliminar** — adensa a cada coleta. Dados via `$lasanhaRows`/`$lasanhaCols`.
 - **g10a/g10b** tempo de detecção LAMP (histograma **bins compartilhados**) + intensidade.
 - **g11** curva ROC dos critérios LAMP (AUC empírica + IC Hanley–McNeil).
-- **g12** heatmap κ 5×5 (canvas custom).
+- **g12** heatmap κ 5×5 (canvas custom) — **cada célula mostra κ + IC95% `[lo; hi]`** (`$matrizKci` via `kappaCI()`); tooltip por hover.
 - **g13** **forest plot** dos OR do modelo logístico clima→infecção (canvas custom, escala log, linha OR=1).
 - **heatmap_temporal** clima semanal por fazenda (canvas custom, NASA, auto-carga).
+
+> **Paleta:** `$OKABE_ITO`/`$cores` (l.~911) = `['#E69F00','#56B4E9','#009E73','#F0E442','#0072B2','#D55E00','#CC79A7']` (CVD-safe). Helper `corBorda()` escurece o amarelo `#F0E442`→`#B59E00` para borda/linha. Aplicada em g1/g2/g9a/g9c. **Pendente:** g8 ainda usa cores próprias.
+> **Harness de validação no scratchpad:** `render.sh` (mock PDO→`out.html`, 0 warnings) + `shoot.mjs` (Playwright; ids incluem g8/g9a/g9b/g9c/g12). Mock `mock_config.php`: o branch do `$sqlCo` (`AS pcr_anaplasma` + `codigo_animal`) devolve `estacao` por linha; dataset = 3 fazendas × 20 animais × 4 estações (≥2 ondas/animal p/ o lasagna).
 
 ## 9. Problemas conhecidos, convenções e gotchas
 
