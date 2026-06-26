@@ -1285,6 +1285,7 @@ $wLAMPCyt = wilson95($nLAMPCytB,$nTotalComp);
 if ($fonte === 'v_dados_cientificos') {
     $sqlCo = "SELECT codigo_animal, data_coleta,
                      MAX(fazenda) AS fazenda,
+                     MAX(estacao) AS estacao,
                      MAX(pcr_babesia) AS pcr_babesia,
                      MAX(pcr_anaplasma) AS pcr_anaplasma,
                      MAX(pcr_trypanosoma) AS pcr_trypanosoma,
@@ -1339,16 +1340,32 @@ $wMulti = wilson95($nMultiInfeccao, $nTotalCo);
 // =========================================================
 // ITEM 2 - ANALISE LONGITUDINAL por codigo_animal
 // =========================================================
-$animais = []; // codigo_animal => [['data'=>, 'bb'=>0/1, 'am'=>, 'tv'=>], ...]
+// Estacao a partir da data (hemisferio sul) — fallback quando a view nao traz 'estacao'
+function estacaoDeData($data) {
+    $ts = strtotime((string)$data);
+    if ($ts === false) return null;
+    $m = (int)date('n', $ts); $d = (int)date('j', $ts);
+    $md = $m * 100 + $d;
+    if ($md >= 1221 || $md <= 320)  return 'Verão';     // 21/12 - 20/03
+    if ($md >= 321 && $md <= 620)   return 'Outono';    // 21/03 - 20/06
+    if ($md >= 621 && $md <= 922)   return 'Inverno';   // 21/06 - 22/09
+    return 'Primavera';                                 // 23/09 - 20/12
+}
+$animais = []; // codigo_animal => [['data'=>, 'estacao'=>, 'ano'=>, 'fazenda'=>, 'bb'=>0/1, 'am'=>, 'tv'=>], ...]
 foreach ($rowsCo as $r) {
     $cod = $r['codigo_animal'] ?? null;
     if (!$cod) continue;
     $bb = (((int)($r['pcr_babesia'] ?? 0)) || ((int)($r['lamp_babesia_18s'] ?? 0)) || ((int)($r['lamp_babesia_cytb'] ?? 0))) ? 1 : 0;
     $am = (int)($r['pcr_anaplasma'] ?? 0);
     $tv = (int)($r['pcr_trypanosoma'] ?? 0);
+    $est = $r['estacao'] ?? null;
+    if (!$est) $est = estacaoDeData($r['data_coleta']); // path animais_completos nao tem 'estacao'
+    $ts  = strtotime((string)($r['data_coleta'] ?? ''));
+    $ano = $ts !== false ? (int)date('Y', $ts) : null;
     if (!isset($animais[$cod])) $animais[$cod] = [];
     $animais[$cod][] = [
         'data' => $r['data_coleta'],
+        'estacao' => $est, 'ano' => $ano, 'fazenda' => $r['fazenda'] ?? null,
         'bb'   => $bb, 'am' => $am, 'tv' => $tv,
     ];
 }
@@ -1406,6 +1423,71 @@ $nTransicoes = array_sum($transBB);
 $nAnimaisLongi = count($animais);
 $nAnimaisCom2plus = 0;
 foreach ($animais as $cs) if (count($cs) >= 2) $nAnimaisCom2plus++;
+
+// =========================================================
+// LASAGNA PLOT (Grafico 9C) - matriz animal x onda (ano-estacao)
+// status por celula: negativo / B.bovis / A.marginale / T.vivax / coinfeccao / ausente
+// (AUDITORIA_MELHORIAS_TPB.md sec.5.7 — preliminar; adensa a cada coleta)
+// =========================================================
+$ordemEstacao = ['Verão' => 1, 'Outono' => 2, 'Inverno' => 3, 'Primavera' => 4];
+// Status de uma coleta: prioridade coinfeccao > patogeno unico > negativo
+function statusColeta($c) {
+    $soma = $c['bb'] + $c['am'] + $c['tv'];
+    if ($soma >= 2) return 'coinf';
+    if ($c['bb']) return 'bb';
+    if ($c['am']) return 'am';
+    if ($c['tv']) return 'tv';
+    return 'neg';
+}
+// 1) Universo de ondas (ano-estacao) observadas, ordenadas cronologicamente
+$ondasSet = [];
+foreach ($animais as $cs) {
+    foreach ($cs as $c) {
+        if ($c['ano'] === null || $c['estacao'] === null) continue;
+        $key = $c['ano'] . '|' . $c['estacao'];
+        $ondasSet[$key] = true;
+    }
+}
+$ondasKeys = array_keys($ondasSet);
+usort($ondasKeys, function($a, $b) use ($ordemEstacao) {
+    [$ya, $ea] = explode('|', $a); [$yb, $eb] = explode('|', $b);
+    if ((int)$ya !== (int)$yb) return (int)$ya <=> (int)$yb;
+    return ($ordemEstacao[$ea] ?? 9) <=> ($ordemEstacao[$eb] ?? 9);
+});
+// Rotulos curtos das colunas (ex.: "Out/25")
+$abrevEstacao = ['Verão'=>'Ver','Outono'=>'Out','Inverno'=>'Inv','Primavera'=>'Pri'];
+$lasanhaCols = [];
+foreach ($ondasKeys as $k) {
+    [$y, $e] = explode('|', $k);
+    $lasanhaCols[] = ($abrevEstacao[$e] ?? $e) . '/' . substr($y, 2);
+}
+// 2) Matriz: 1 linha por animal (>=1 coleta com onda valida); celula = status ou 'ausente'
+$lasanhaRows = []; // [ ['animal'=>, 'fazenda'=>, 'nPos'=>, 'cells'=>[status por coluna]] ]
+foreach ($animais as $cod => $cs) {
+    // status por onda deste animal
+    $porOnda = [];
+    $faz = null; $nPos = 0;
+    foreach ($cs as $c) {
+        if ($c['ano'] === null || $c['estacao'] === null) continue;
+        $faz = $faz ?? $c['fazenda'];
+        $st = statusColeta($c);
+        if ($st !== 'neg') $nPos++;
+        $porOnda[$c['ano'] . '|' . $c['estacao']] = $st;
+    }
+    if (empty($porOnda)) continue;
+    $cells = [];
+    foreach ($ondasKeys as $k) $cells[] = $porOnda[$k] ?? 'ausente';
+    $lasanhaRows[] = ['animal' => $cod, 'fazenda' => $faz, 'nPos' => $nPos, 'cells' => $cells];
+}
+// Ordenar: fazenda, depois mais positivos no topo, depois codigo
+usort($lasanhaRows, function($a, $b) {
+    $f = strcmp((string)$a['fazenda'], (string)$b['fazenda']);
+    if ($f !== 0) return $f;
+    if ($a['nPos'] !== $b['nPos']) return $b['nPos'] <=> $a['nPos'];
+    return strcmp((string)$a['animal'], (string)$b['animal']);
+});
+$nLasanhaAnimais = count($lasanhaRows);
+$nLasanhaOndas   = count($lasanhaCols);
 
 // =========================================================
 // ITEM 4 - TEMPO DE DETECCAO LAMP (proxy de carga parasitaria)
@@ -2316,6 +2398,35 @@ $temAnyEst = !empty($estPrev);
       </div>
     </div>
   </div>
+</div>
+
+
+<!-- ============================================================
+     LASAGNA PLOT - Grafico 9C (matriz animal x onda)
+     ============================================================ -->
+<div class="chart-wrap">
+  <h3>Gráfico 9C - Lasagna plot longitudinal por animal</h3>
+  <p style="color:#444;font-size:.92em;line-height:1.5;">
+    Cada <b>linha</b> é um animal e cada <b>coluna</b> é uma onda de coleta (estação × ano);
+    a <b>cor</b> da célula indica o status naquela onda. Animais agrupados por fazenda e
+    ordenados por nº de ondas positivas. Células cinzas = animal não amostrado naquela onda.
+    <b>Preliminar:</b> com poucas ondas o gráfico fica esparso e <b>adensa a cada coleta</b>,
+    revelando portadores crônicos vs. infecções transitórias.
+  </p>
+  <?php if ($nLasanhaAnimais === 0 || $nLasanhaOndas === 0): ?>
+    <div style="background:#fff3cd;color:#664d03;padding:12px;border-radius:4px;margin:1em 0;">
+      <b>Sem dados longitudinais suficientes</b> para o lasagna plot (nenhuma onda estação/ano
+      identificada). Será populado conforme novas coletas sazonais forem registradas.
+    </div>
+  <?php else: ?>
+  <div style="overflow-x:auto;"><canvas id="g9c"></canvas></div>
+  <div class="chart-actions" style="margin-top:.4em;">
+    <button class="btn-dl" onclick="baixarGrafico('g9c','Grafico9C_Lasagna_Longitudinal')">
+      <svg viewBox="0 0 24 24"><path d="M5 3v18h14V3H5z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+      Baixar Gráfico
+    </button>
+  </div>
+  <?php endif; ?>
 </div>
 
 
@@ -3433,6 +3544,123 @@ new Chart(document.getElementById('g9b'), {
         scales: { y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'N animais' } } }
     }
 });
+
+// =================================================================
+// GRAFICO 9C: Lasagna plot longitudinal por animal (canvas custom)
+// =================================================================
+const lasanhaRows = <?= json_encode($lasanhaRows) ?>;
+const lasanhaCols = <?= json_encode($lasanhaCols) ?>;
+// Cores por status (Okabe-Ito; ausente = cinza neutro)
+const corStatus = {
+    'neg':     '#e9ecef', // negativo (claro neutro)
+    'bb':      '#E69F00', // B. bovis
+    'am':      '#56B4E9', // A. marginale
+    'tv':      '#009E73', // T. vivax
+    'coinf':   '#D55E00', // coinfeccao
+    'ausente': '#cfcfcf'  // nao amostrado
+};
+const rotStatus = {
+    'neg':'Negativo','bb':'B. bovis','am':'A. marginale','tv':'T. vivax',
+    'coinf':'Coinfecção','ausente':'Não amostrado'
+};
+let _g9cGeo = null;
+
+function renderLasagna() {
+    const canvas = document.getElementById('g9c');
+    if (!canvas || !lasanhaRows.length || !lasanhaCols.length) return;
+    const parent = canvas.parentElement;
+    const nRows = lasanhaRows.length, nCols = lasanhaCols.length;
+    const padTop = 64, padLeft = 96, padRight = 12, padBottom = 18;
+    const cellH = Math.max(10, Math.min(22, 520 / nRows)); // altura por animal
+    const minCellW = 34;
+    const Wdisp = Math.max(parent.clientWidth - 4, padLeft + padRight + nCols * minCellW);
+    canvas.width  = Wdisp;
+    canvas.height = padTop + padBottom + nRows * cellH;
+    const ctx = canvas.getContext('2d');
+    const cellW = (canvas.width - padLeft - padRight) / nCols;
+    _g9cGeo = { padTop, padLeft, cellW, cellH, nRows, nCols };
+
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // Cabecalho de colunas (ondas)
+    ctx.fillStyle = '#1F4E78'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+    for (let j = 0; j < nCols; j++) {
+        ctx.fillText(lasanhaCols[j], padLeft + j*cellW + cellW/2, padTop - 8);
+    }
+    // Linhas (animais) + rotulo
+    const mostrarRotulo = cellH >= 11;
+    let fazAnterior = null;
+    for (let i = 0; i < nRows; i++) {
+        const row = lasanhaRows[i];
+        const y = padTop + i*cellH;
+        if (mostrarRotulo) {
+            ctx.fillStyle = '#444'; ctx.font = (cellH<14?'9px':'10px') + ' sans-serif'; ctx.textAlign = 'right';
+            ctx.fillText(row.animal, padLeft - 6, y + cellH/2 + 3);
+        }
+        // separador de fazenda
+        if (row.fazenda !== fazAnterior) {
+            ctx.strokeStyle = '#1F4E78'; ctx.lineWidth = 1.5;
+            ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(canvas.width - padRight, y); ctx.stroke();
+            fazAnterior = row.fazenda;
+        }
+        for (let j = 0; j < nCols; j++) {
+            const st = row.cells[j];
+            const x = padLeft + j*cellW;
+            ctx.fillStyle = corStatus[st] || '#fff';
+            ctx.fillRect(x, y, cellW - 1, cellH - 1);
+        }
+    }
+    // Legenda
+    const ordemLeg = ['neg','bb','am','tv','coinf','ausente'];
+    let lx = padLeft, ly = canvas.height - 4;
+    ctx.font = '10px sans-serif'; ctx.textBaseline = 'middle';
+    for (const st of ordemLeg) {
+        ctx.fillStyle = corStatus[st]; ctx.fillRect(lx, ly - 9, 11, 9);
+        ctx.strokeStyle = '#999'; ctx.lineWidth = 0.5; ctx.strokeRect(lx, ly - 9, 11, 9);
+        ctx.fillStyle = '#333'; ctx.textAlign = 'left';
+        ctx.fillText(rotStatus[st], lx + 15, ly - 4);
+        lx += 18 + ctx.measureText(rotStatus[st]).width + 16;
+    }
+    ctx.textBaseline = 'alphabetic';
+}
+
+// Tooltip do lasagna (hit-test pela geometria)
+function setupLasagnaTooltip() {
+    const canvas = document.getElementById('g9c');
+    if (!canvas || !lasanhaRows.length) return;
+    let tip = document.getElementById('g9c-tip');
+    if (!tip) {
+        tip = document.createElement('div');
+        tip.id = 'g9c-tip';
+        tip.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;display:none;'
+            + 'background:#1F4E78;color:#fff;padding:6px 9px;border-radius:5px;font-size:12px;'
+            + 'box-shadow:0 2px 8px rgba(0,0,0,.25);line-height:1.35;';
+        document.body.appendChild(tip);
+    }
+    canvas.addEventListener('mousemove', (ev) => {
+        if (!_g9cGeo) { tip.style.display='none'; return; }
+        const rect = canvas.getBoundingClientRect();
+        const sx = canvas.width / rect.width, sy = canvas.height / rect.height;
+        const cx = (ev.clientX - rect.left) * sx, cy = (ev.clientY - rect.top) * sy;
+        const g = _g9cGeo;
+        const j = Math.floor((cx - g.padLeft) / g.cellW);
+        const i = Math.floor((cy - g.padTop)  / g.cellH);
+        if (i < 0 || j < 0 || i >= g.nRows || j >= g.nCols) { tip.style.display='none'; return; }
+        const row = lasanhaRows[i];
+        const st = row.cells[j];
+        tip.innerHTML = '<b>' + row.animal + '</b>'
+            + (row.fazenda ? ' · ' + row.fazenda : '')
+            + '<br>' + lasanhaCols[j] + ': ' + rotStatus[st];
+        tip.style.display = 'block';
+        tip.style.left = (ev.clientX + 14) + 'px';
+        tip.style.top  = (ev.clientY + 14) + 'px';
+    });
+    canvas.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+}
+
+document.addEventListener('DOMContentLoaded', () => { renderLasagna(); setupLasagnaTooltip(); });
+window.addEventListener('resize', () => { setTimeout(renderLasagna, 100); });
 
 // =================================================================
 // ITEM 4 - GRAFICO 10A: histograma tempo deteccao | 10B: barras intensidade
