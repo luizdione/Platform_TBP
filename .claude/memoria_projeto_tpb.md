@@ -102,25 +102,26 @@ Validada com **45 testes** contra valores de referência (ver §9). Funções di
 | `6538fd9` | 2026-06-26 | **Roadmap item 2:** IC95% do κ no heatmap g12 — nova `$matrizKci` (via `kappaCI()`), 2ª linha `[lo; hi]` por célula + tooltip por hover (hit-test `_g12geo`). Não toca Tabela 10. |
 | `549da03` | 2026-06-26 | **Roadmap item 1:** paleta **Okabe-Ito** (CVD-safe) — `$OKABE_ITO`/`$cores` (g1, g2) + `cmapEstado` (g9a, cinza p/ "coleta única"); helper `corBorda()` escurece o amarelo `#F0E442`→`#B59E00` (borda/linha) p/ contraste. |
 | `e23e46b` | 2026-06-26 | **Roadmap item 3:** novo **lasagna plot g9c** (linha=animal, coluna=onda estação×ano, cor=status). `$sqlCo` ganha `MAX(estacao)`; `$animais` guarda estacao/ano/fazenda (helper `estacaoDeData()` p/ fallback); render canvas custom `renderLasagna()` + tooltip. ⚠️ `$sqlCo` alimenta g8 e g12 — re-testados, intactos. |
+| `12c69b2` | 2026-06-26 | **Ajustes visuais:** largura das barras g7a/g9a/g9b (`maxBarThickness` 56/64/56 + `categoryPercentage` 0.6); **g11 ROC** reformulado (1 dataset por critério, cor Okabe-Ito + `pointStyle` distinto + legenda; removido `rocLabelPlugin`; nota explicativa; canvas 440px); **g4/g5/g6** teto Y abre folga até 115% só quando o pico+IC95% encosta em 100 (whisker superior aparece inteiro), prevalência baixa mantém teto justo, trend recortada. |
 
 ## 8. Gráficos atuais do relatório (mapa rápido)
 
 - **g1** prevalência por fazenda × parasita (barras + IC95% Wilson, eixo Y dinâmico).
 - **g2** prevalência por estação (linha, eixo Y dinâmico) + **χ² sazonal**.
 - **g3** rosca: nº animais por fazenda.
-- **g4/g5/g6** clima × prevalência (scatter: pontos ∝ n, IC Wilson, **reta de tendência OLS**, ρ+IC+p; eixo Y ≤100%).
-- **g7a/g7b** comparação PCR vs LAMP (positivos por método; concordância) + **McNemar + κ com IC95%**.
+- **g4/g5/g6** clima × prevalência (scatter: pontos ∝ n, IC Wilson, **reta de tendência OLS recortada**, ρ+IC+p; eixo Y dinâmico com **folga até 115%** quando o pico+IC encosta em 100 — whisker superior visível; prevalência baixa = teto justo <100). Função JS `corrChart()` (l.~2904).
+- **g7a/g7b** comparação PCR vs LAMP (positivos por método; concordância) + **McNemar + κ com IC95%**. g7a com `maxBarThickness:56`.
 - **g8** coinfecção (UpSet-like, B. bovis × A. marginale × T. vivax). ⚠️ cores hardcoded próprias (não usa `$cores`; ainda não-Okabe-Ito).
-- **g9a/g9b** estados longitudinais (g9a usa `cmapEstado` Okabe-Ito) + distribuição de amostras por animal.
+- **g9a/g9b** estados longitudinais (g9a usa `cmapEstado` Okabe-Ito, `maxBarThickness:64`) + distribuição de amostras por animal (`maxBarThickness:56`). Barras estreitadas via `categoryPercentage:0.6`.
 - **g9c** **lasagna plot** longitudinal por animal (canvas custom): linha=animal (agrupado por fazenda, ordenado por nº ondas+), coluna=onda (estação×ano), cor=status (negativo/B.bovis/A.marginale/T.vivax/coinfecção/ausente, Okabe-Ito). Tooltip por hover. **Preliminar** — adensa a cada coleta. Dados via `$lasanhaRows`/`$lasanhaCols`.
 - **g10a/g10b** tempo de detecção LAMP (histograma **bins compartilhados**) + intensidade.
-- **g11** curva ROC dos critérios LAMP (AUC empírica + IC Hanley–McNeil).
+- **g11** curva ROC dos critérios LAMP (AUC empírica + IC Hanley–McNeil). **1 dataset por critério** (só 18S/só CytB/OR/AND) com cor Okabe-Ito + forma distinta + legenda (sem rótulos inline sobrepostos); diagonal tracejada = acaso; nota explicativa (X=1−espec., Y=sens., canto sup-esq = melhor).
 - **g12** heatmap κ 5×5 (canvas custom) — **cada célula mostra κ + IC95% `[lo; hi]`** (`$matrizKci` via `kappaCI()`); tooltip por hover.
 - **g13** **forest plot** dos OR do modelo logístico clima→infecção (canvas custom, escala log, linha OR=1).
 - **heatmap_temporal** clima semanal por fazenda (canvas custom, NASA, auto-carga).
 
 > **Paleta:** `$OKABE_ITO`/`$cores` (l.~911) = `['#E69F00','#56B4E9','#009E73','#F0E442','#0072B2','#D55E00','#CC79A7']` (CVD-safe). Helper `corBorda()` escurece o amarelo `#F0E442`→`#B59E00` para borda/linha. Aplicada em g1/g2/g9a/g9c. **Pendente:** g8 ainda usa cores próprias.
-> **Harness de validação no scratchpad:** `render.sh` (mock PDO→`out.html`, 0 warnings) + `shoot.mjs` (Playwright; ids incluem g8/g9a/g9b/g9c/g12). Mock `mock_config.php`: o branch do `$sqlCo` (`AS pcr_anaplasma` + `codigo_animal`) devolve `estacao` por linha; dataset = 3 fazendas × 20 animais × 4 estações (≥2 ondas/animal p/ o lasagna).
+> **Harness de validação no scratchpad:** `render.sh` (mock PDO→`out.html`, 0 warnings) + `shoot.mjs` (Playwright; ids incluem g7a/g8/g9a/g9b/g9c/g11/g12). Mock `mock_config.php`: o branch do `$sqlCo` (`AS pcr_anaplasma` + `codigo_animal`) devolve `estacao` por linha; dataset = 3 fazendas × 20 animais × 4 estações (≥2 ondas/animal p/ o lasagna). Nota: nesse mock a prevalência é alta (~50-100%), útil para exercitar a folga >100% dos g4-g6.
 
 ## 9. Problemas conhecidos, convenções e gotchas
 
