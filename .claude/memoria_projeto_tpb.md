@@ -23,7 +23,7 @@
 - **Desenho do estudo:** **4 coletas por ano (1 por estação) × 3 localidades**, **longitudinal** (mesmos animais reamostrados). ⇒ Muitos dados acumulando ao longo dos anos.
 - **Instituição:** IFRJ — LGM (Laboratório de Genética Molecular), Campus Pinheiral / parcerias.
 - **Site público:** `https://www.ifrj-crj-geneticamolecular.online/aplicativos/diagnostico_tpb/`
-  - Página científica: `relatorio_cientifico.php` (protegida por senha).
+  - Página científica: `relatorio_cientifico.php` (**acesso livre, sem senha** desde 2026-06-26 — ver §12).
 
 ## 2. Repositórios e branches
 
