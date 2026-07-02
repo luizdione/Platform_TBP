@@ -150,3 +150,9 @@ Validada com **45 testes** contra valores de referência (ver §9). Funções di
 4. **Banco:** nunca assumir nomes de coluna — confirmar via `SHOW COLUMNS`/`information_schema`; entregar SQL para o usuário rodar (o ambiente não alcança a Hostinger).
 5. **Deploy:** lembrar o usuário que a Hostinger é manual (push → pull → `sincronizar_hostinger.bat`/Gerenciador).
 6. Ser honesto sobre limitações estatísticas (poucas fazendas, EPV baixo, colinearidade) e não superinterpretar.
+
+## 12. Registro de acesso
+- **2026-06-26:** `relatorio_cientifico.php` passou a ser de **ACESSO LIVRE (sem senha)** a pedido
+  do responsável — o portão `$_SESSION['relatorio_auth']` (login bcrypt + rate limit + tela de senha)
+  e o link "Sair" foram **removidos**. O `.htaccess` não tem Basic Auth. Para **reativar** a senha no
+  futuro, restaurar o bloco de autenticação no topo do arquivo (histórico do Git em commits ≤ `74a7729`).

@@ -8,96 +8,13 @@
  */
 
 // =================================================================
-// AUTENTICACAO SIMPLES (senha unica de acesso, hash bcrypt)
-// O hash fica em config.php (bloqueado por .htaccess e gitignore).
+// ACESSO LIVRE PARA COLABORADORES (sem senha)
+// A tela de login por senha foi removida a pedido do responsavel.
 // =================================================================
 if (session_status() === PHP_SESSION_NONE) session_start();
 
 require_once __DIR__ . '/config.php';
 
-// Logout
-if (isset($_GET['logout'])) {
-    unset($_SESSION['relatorio_auth']);
-    header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
-    exit;
-}
-
-// Rate limit simples: 5 tentativas / 60s por sessao
-if (!isset($_SESSION['relatorio_tentativas']))       $_SESSION['relatorio_tentativas'] = 0;
-if (!isset($_SESSION['relatorio_tentativas_inicio'])) $_SESSION['relatorio_tentativas_inicio'] = time();
-if (time() - $_SESSION['relatorio_tentativas_inicio'] > 60) {
-    $_SESSION['relatorio_tentativas'] = 0;
-    $_SESSION['relatorio_tentativas_inicio'] = time();
-}
-
-// Login submit (valida via hash bcrypt - texto plano nao fica no codigo)
-$erro_login = null;
-if (isset($_POST['senha_relatorio'])) {
-    if ($_SESSION['relatorio_tentativas'] >= 5) {
-        $erro_login = 'Muitas tentativas. Aguarde 60 segundos.';
-    } elseif (function_exists('verificarSenhaAjuda') && verificarSenhaAjuda((string)$_POST['senha_relatorio'])) {
-        $_SESSION['relatorio_auth']      = true;
-        $_SESSION['relatorio_tentativas'] = 0;
-        header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
-        exit;
-    } else {
-        $_SESSION['relatorio_tentativas']++;
-        $erro_login = 'Senha incorreta. Tente novamente. (' . $_SESSION['relatorio_tentativas'] . '/5)';
-    }
-}
-
-// Tela de login se nao autenticado
-if (empty($_SESSION['relatorio_auth'])) {
-    ?>
-    <!doctype html>
-    <html lang="pt-br"><head>
-    <meta charset="utf-8">
-    <title>Acesso - Relatorio Cientifico TPB</title>
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <style>
-      :root{--azul:#1F4E78;--azul-claro:#2E75B6}
-      *{box-sizing:border-box}
-      body{margin:0;min-height:100vh;font-family:'Segoe UI',Arial,sans-serif;
-        background:linear-gradient(135deg,#1F4E78 0%,#2E75B6 100%);
-        display:flex;align-items:center;justify-content:center;padding:1em}
-      .card{background:#fff;border-radius:14px;padding:2.4em 2.2em;
-        box-shadow:0 12px 40px rgba(0,0,0,.25);max-width:380px;width:100%}
-      h1{margin:0 0 .2em;color:var(--azul);font-size:1.3em}
-      .sub{color:#666;font-size:.88em;margin-bottom:1.6em}
-      label{display:block;font-size:.85em;color:#444;margin-bottom:.4em;font-weight:600}
-      input[type=password]{width:100%;padding:.75em 1em;border:1.5px solid #cbd5e0;
-        border-radius:8px;font-size:1.1em;letter-spacing:.15em;text-align:center;
-        font-variant-numeric:tabular-nums}
-      input[type=password]:focus{outline:none;border-color:var(--azul-claro);
-        box-shadow:0 0 0 3px rgba(46,117,182,.15)}
-      button{width:100%;margin-top:1em;padding:.8em;background:var(--azul);
-        color:#fff;border:0;border-radius:8px;font-size:1em;font-weight:600;
-        cursor:pointer;transition:all .15s}
-      button:hover{background:#143A5C;transform:translateY(-1px);
-        box-shadow:0 4px 12px rgba(31,78,120,.3)}
-      .erro{background:#fee;color:#a00;padding:.6em .9em;border-radius:6px;
-        font-size:.85em;border-left:3px solid #c00;margin-bottom:1em}
-      .footer{text-align:center;font-size:.78em;color:#888;margin-top:1.6em}
-    </style>
-    </head><body>
-      <form class="card" method="post" autocomplete="off">
-        <h1>Relatorio Cientifico - TPB</h1>
-        <div class="sub">Diagnostico de hemoparasitas em bovinos<br>IFRJ - LGM</div>
-        <?php if ($erro_login): ?>
-          <div class="erro"><?= htmlspecialchars($erro_login) ?></div>
-        <?php endif; ?>
-        <label for="senha_relatorio">Senha de acesso</label>
-        <input type="password" id="senha_relatorio" name="senha_relatorio" required autofocus
-               inputmode="numeric" maxlength="32">
-        <button type="submit">Entrar</button>
-        <div class="footer">Acesso restrito - dados de pesquisa</div>
-      </form>
-    </body></html>
-    <?php
-    exit;
-}
-
-require_once __DIR__ . '/config.php';
 if (function_exists('setSecurityHeaders')) setSecurityHeaders();
 
 $pdo = getDBConnection();
@@ -2841,7 +2758,6 @@ e clique em "⬇️ Carregar 90d clima na NASA POWER" para popular dados_climati
 
 </main>
 <footer>Diagnostico TPB - IFRJ - LGM - Pipeline cientifico v1
-  &nbsp;|&nbsp; <a href="?logout=1" style="color:#666;text-decoration:none;font-size:.9em;">🔒 Sair</a>
 </footer>
 
 <script>
