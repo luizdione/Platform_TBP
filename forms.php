@@ -1073,7 +1073,7 @@ try {
                 <h2 class="section-title">Dados Climáticos</h2>
                 
                 <div style="background: #bee3f8; border-left: 4px solid #2b6cb0; padding: 15px; margin-bottom: 20px; border-radius: 4px;">
-                    <strong>💡 Informação:</strong> Os dados climáticos são calculados automaticamente com base na <strong>data de coleta</strong> e consideram a <strong>média dos 90 dias anteriores</strong>. Você pode ajustar o período manualmente se necessário.
+                    <strong>💡 Cálculo automático:</strong> Ao escolher o <strong>local</strong> e a <strong>data da coleta</strong>, o sistema busca sozinho as variáveis climáticas dos <strong>90 dias anteriores</strong> na <strong>NASA POWER</strong> (satélite) e classifica o período pela <strong>estação do ano predominante</strong> nesses 90 dias. Basta conferir e salvar — você ainda pode ajustar qualquer valor ou o período manualmente.
                 </div>
                 
                 <form id="form-clima" method="POST" action="processa_formulario.php">
@@ -1118,6 +1118,15 @@ try {
                             </div>
                         </div>
                         <p id="info-periodo" style="margin-top: 10px; color: #718096; font-size: 14px;"></p>
+
+                        <!-- Estação predominante nos 90 dias (classificação categórica) -->
+                        <div id="estacao-predominante-box" style="margin-top: 12px; padding: 12px; border-radius: 6px; background: #fefcbf; border-left: 4px solid #d69e2e; display: none;">
+                            <strong>🗓️ Estação predominante (90 dias):</strong>
+                            <span id="estacao-predominante-label" style="font-weight: 700;">—</span>
+                            <span id="estacao-predominante-dist" style="color: #744210; font-size: 13px;"></span>
+                        </div>
+                        <!-- Estação categórica enviada no POST (usada na coleta/relatório) -->
+                        <input type="hidden" name="estacao" id="estacao_clima">
                     </div>
 
                     <!-- Seleção de Fonte de Dados -->
@@ -1127,10 +1136,9 @@ try {
                             <div class="form-group" style="margin-bottom: 0;">
                                 <label for="fonte_dados_clima">Selecione a Fonte</label>
                                 <select id="fonte_dados_clima" style="width: 100%; padding: 8px; border: 2px solid #e2e8f0; border-radius: 5px;">
-                                    <option value="banco">Banco de Dados (Dados já cadastrados)</option>
-                                    <option value="inmet">INMET (Brasil - Gratuito)</option>
-                                    <option value="nasa">NASA POWER (Global - Gratuito)</option>
-                                    <option value="simulado">Dados Simulados (Teste)</option>
+                                    <option value="nasa" selected>NASA POWER (satélite — automático, recomendado)</option>
+                                    <option value="banco">Banco de Dados (dados já cadastrados)</option>
+                                    <option value="simulado">Dados Simulados (teste)</option>
                                 </select>
                             </div>
                             <button type="button" class="btn btn-secondary" onclick="confirmarFonteEBuscarDados()" style="background: #4299e1; margin-bottom: 0;">
@@ -1159,7 +1167,7 @@ try {
                         </div>
                         
                         <div class="form-group">
-                            <label for="pluviometria">Precipitação (mm)</label>
+                            <label for="pluviometria">Precipitação acumulada 90 d (mm)</label>
                             <input type="number" id="pluviometria" name="pluviometria_mm" step="0.1" min="0">
                         </div>
                         
@@ -1267,7 +1275,7 @@ try {
 
         async function buscarClimaDia() {
             const localId = document.getElementById('local_clima').value;
-            const data = document.getElementById('data_registro').value;
+            const data = document.getElementById('data_registro')?.value;
             if (!localId || !data) return;
             try {
                 const btn = document.querySelector('#form-clima .btn.btn-primary');
@@ -1341,8 +1349,16 @@ try {
             document.getElementById('form-clima').scrollIntoView({behavior:'smooth', block:'center'});
         }
 
-        document.getElementById('local_clima').addEventListener('change', buscarClimaDia);
-        document.getElementById('data_registro').addEventListener('change', buscarClimaDia);
+        (function () {
+            const elLocalClima = document.getElementById('local_clima');
+            if (elLocalClima) {
+                elLocalClima.addEventListener('change', buscarClimaDia);
+                // Cálculo automático das variáveis climáticas ao trocar o local
+                elLocalClima.addEventListener('change', talvezAutoCalcularClima);
+            }
+            const elDataReg = document.getElementById('data_registro');
+            if (elDataReg) elDataReg.addEventListener('change', buscarClimaDia);
+        })();
 
         // ============================================
         // CARREGAR ANIMAIS POR LOCAL
@@ -1777,6 +1793,76 @@ try {
                 <em>Este é o período padrão para análise climática. Você pode editá-lo se necessário.</em>
             `;
             infoPeriodo.style.color = '#2f855a';
+
+            // Classificação categórica imediata (feedback instantâneo, sem esperar a NASA)
+            atualizarBadgeEstacao(classificarEstacaoPredominante(dataColetaInput.value));
+
+            // Dispara o cálculo automático das variáveis (NASA) quando local + data existem
+            talvezAutoCalcularClima();
+        }
+
+        // ============================================
+        // CLASSIFICAÇÃO SAZONAL (Hemisfério Sul) — 90 dias
+        // ============================================
+        function estacaoDoMesSH(mes) { // mes: 1..12
+            if ([12, 1, 2].includes(mes)) return 'Verão';
+            if ([3, 4, 5].includes(mes)) return 'Outono';
+            if ([6, 7, 8].includes(mes)) return 'Inverno';
+            return 'Primavera'; // 9, 10, 11
+        }
+
+        // Conta, dia a dia, a estação de cada dia nos 90 dias anteriores à coleta
+        // e devolve a predominante + a distribuição.
+        function classificarEstacaoPredominante(dataColetaStr) {
+            if (!dataColetaStr) return null;
+            const fim = new Date(dataColetaStr + 'T00:00:00');
+            if (isNaN(fim.getTime())) return null;
+            const ini = new Date(fim);
+            ini.setDate(ini.getDate() - 90);
+
+            const dist = { 'Verão': 0, 'Outono': 0, 'Inverno': 0, 'Primavera': 0 };
+            const cur = new Date(ini);
+            while (cur <= fim) {
+                dist[estacaoDoMesSH(cur.getMonth() + 1)]++;
+                cur.setDate(cur.getDate() + 1);
+            }
+            let melhor = 'Verão';
+            for (const k in dist) if (dist[k] > dist[melhor]) melhor = k;
+            return { estacao: melhor, dist: dist };
+        }
+
+        function atualizarBadgeEstacao(info) {
+            const box = document.getElementById('estacao-predominante-box');
+            const lbl = document.getElementById('estacao-predominante-label');
+            const dst = document.getElementById('estacao-predominante-dist');
+            const hid = document.getElementById('estacao_clima');
+            if (!box || !lbl || !dst || !hid) return;
+            if (!info || !info.estacao) {
+                box.style.display = 'none';
+                hid.value = '';
+                return;
+            }
+            const emoji = { 'Verão': '☀️', 'Outono': '🍂', 'Inverno': '❄️', 'Primavera': '🌸' }[info.estacao] || '🗓️';
+            lbl.textContent = ` ${emoji} ${info.estacao}`;
+            const dist = info.dist || {};
+            const total = Object.values(dist).reduce((a, b) => a + b, 0) || 0;
+            const partes = Object.entries(dist)
+                .filter(([, n]) => n > 0)
+                .map(([k, n]) => `${k}: ${n} d`)
+                .join(' · ');
+            dst.textContent = total ? ` — ${dist[info.estacao] || 0}/${total} dias (${partes})` : '';
+            hid.value = info.estacao;
+            box.style.display = 'block';
+        }
+
+        // Dispara o cálculo automático (NASA) com debounce quando local + data estão preenchidos
+        let _timerAutoClima = null;
+        function talvezAutoCalcularClima() {
+            const localId = document.getElementById('local_clima').value;
+            const dataColeta = document.getElementById('data_coleta_clima').value;
+            if (!localId || !dataColeta) return;
+            clearTimeout(_timerAutoClima);
+            _timerAutoClima = setTimeout(function () { calcularVariacoesClimaticas(); }, 600);
         }
         
         function habilitarEdicaoPeriodo() {
@@ -1881,11 +1967,19 @@ try {
                 
                 if (data.sucesso) {
                     // Preencher campos automaticamente
-                    if (data.temperatura_media !== null) document.getElementById('temp_media').value = data.temperatura_media;
-                    if (data.temperatura_max !== null) document.getElementById('temp_maxima').value = data.temperatura_max;
-                    if (data.temperatura_min !== null) document.getElementById('temp_minima').value = data.temperatura_min;
-                    if (data.pluviometria_media !== null) document.getElementById('pluviometria').value = data.pluviometria_media;
-                    if (data.umidade_media !== null) document.getElementById('umidade').value = data.umidade_media;
+                    if (data.temperatura_media != null) document.getElementById('temp_media').value = data.temperatura_media;
+                    if (data.temperatura_max != null) document.getElementById('temp_maxima').value = data.temperatura_max;
+                    if (data.temperatura_min != null) document.getElementById('temp_minima').value = data.temperatura_min;
+                    // O campo "Precipitação acumulada 90 d" guarda o TOTAL do período (mm)
+                    if (data.pluviometria_total != null) document.getElementById('pluviometria').value = data.pluviometria_total;
+                    if (data.umidade_media != null) document.getElementById('umidade').value = data.umidade_media;
+                    // Preenche a fonte textual (rastreabilidade)
+                    if (data.fonte) document.getElementById('fonte_dados').value = data.fonte;
+
+                    // Atualiza a estação predominante com a distribuição real vinda do servidor
+                    if (data.estacao_predominante) {
+                        atualizarBadgeEstacao({ estacao: data.estacao_predominante, dist: data.estacao_distribuicao || {} });
+                    }
                     
                     // Verificar se são dados simulados
                     const ehSimulado = data.fonte && data.fonte.includes('Simulados');

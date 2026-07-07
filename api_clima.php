@@ -60,8 +60,107 @@ function buscarNASA($lat, $lon, $dataInicio, $dataFim, $variavel) {
         error_log("NASA Response: " . print_r($data, true));
         return null;
     }
-    
+
     return $data['properties']['parameter'][$paramNASA];
+}
+
+// ============================================
+// Busca NASA POWER completa (todas as variáveis de uma vez) para o período de 90 dias.
+// Retorna já as médias/mín/máx/total agregados, ou null se a NASA falhar.
+// Datas em formato YYYYMMDD.
+// ============================================
+function buscarNASACompleto($lat, $lon, $dataInicioYMD, $dataFimYMD) {
+    $params = 'T2M,T2M_MIN,T2M_MAX,PRECTOTCORR,RH2M';
+    $url = "https://power.larc.nasa.gov/api/temporal/daily/point?parameters={$params}&community=AG&longitude={$lon}&latitude={$lat}&start={$dataInicioYMD}&end={$dataFimYMD}&format=JSON";
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 45);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+
+    if ($curlError) error_log("NASA(completo) CURL Error: " . $curlError);
+    if ($httpCode !== 200 || !$response) {
+        error_log("NASA(completo) HTTP Code: " . $httpCode);
+        return null;
+    }
+
+    $data = json_decode($response, true);
+    if (!isset($data['properties']['parameter'])) return null;
+    $p = $data['properties']['parameter'];
+
+    // Remove valores de preenchimento da NASA (-999) e não numéricos
+    $limpar = function ($k) use ($p) {
+        if (!isset($p[$k]) || !is_array($p[$k])) return [];
+        return array_filter(array_values($p[$k]), fn($v) => is_numeric($v) && $v > -990);
+    };
+    $t   = $limpar('T2M');
+    $tmn = $limpar('T2M_MIN');
+    $tmx = $limpar('T2M_MAX');
+    $pr  = $limpar('PRECTOTCORR');
+    $rh  = $limpar('RH2M');
+    if (empty($t)) return null;
+
+    return [
+        'temperatura_media'  => round(array_sum($t) / count($t), 1),
+        'temperatura_min'    => $tmn ? round(min($tmn), 1) : null,
+        'temperatura_max'    => $tmx ? round(max($tmx), 1) : null,
+        'pluviometria_total' => $pr ? round(array_sum($pr), 1) : 0.0,
+        'pluviometria_media' => $pr ? round(array_sum($pr) / count($pr), 1) : 0.0,
+        'pluviometria_min'   => $pr ? round(min($pr), 1) : 0.0,
+        'pluviometria_max'   => $pr ? round(max($pr), 1) : 0.0,
+        'umidade_media'      => $rh ? round(array_sum($rh) / count($rh), 1) : null,
+        'umidade_min'        => $rh ? round(min($rh), 1) : null,
+        'umidade_max'        => $rh ? round(max($rh), 1) : null,
+        'dias_com_dados'     => count($t),
+    ];
+}
+
+// ============================================
+// Classificação sazonal (Hemisfério Sul) por mês
+// ============================================
+function estacaoDoMesSH($mes) {
+    $mes = (int)$mes;
+    if (in_array($mes, [12, 1, 2], true)) return 'Verão';
+    if (in_array($mes, [3, 4, 5], true))  return 'Outono';
+    if (in_array($mes, [6, 7, 8], true))  return 'Inverno';
+    return 'Primavera'; // 9, 10, 11
+}
+
+// ============================================
+// Estação predominante em um período: conta, dia a dia, a que estação
+// (Hemisfério Sul) cada dia entre $dataInicio e $dataFim pertence e devolve
+// a estação com mais dias + a distribuição completa.
+// ============================================
+function estacaoPredominante($dataInicio, $dataFim) {
+    try {
+        $ini = new DateTime($dataInicio);
+        $fim = new DateTime($dataFim);
+    } catch (Exception $e) {
+        return null;
+    }
+    if ($fim < $ini) { $tmp = $ini; $ini = $fim; $fim = $tmp; }
+
+    $dist = ['Verão' => 0, 'Outono' => 0, 'Inverno' => 0, 'Primavera' => 0];
+    $cursor = clone $ini;
+    $umDia = new DateInterval('P1D');
+    while ($cursor <= $fim) {
+        $dist[estacaoDoMesSH((int)$cursor->format('n'))]++;
+        $cursor->add($umDia);
+    }
+    arsort($dist);
+    $predominante = array_key_first($dist);
+    return [
+        'estacao'           => $predominante,
+        'dias_predominante' => $dist[$predominante],
+        'total_dias'        => array_sum($dist),
+        'distribuicao'      => $dist,
+    ];
 }
 
 // Função para calcular médias climáticas dos últimos 90 dias do banco de dados
@@ -369,10 +468,29 @@ try {
                 }
             }
             
-            // Se escolheu NASA ou INMET, ou se banco não tinha dados
-            if ($fonteEscolhida === 'nasa' || $fonteEscolhida === 'inmet') {
-                // Por enquanto, usar dados simulados (implementação completa de NASA/INMET requer mais tempo)
-                // TODO: Implementar busca real de NASA POWER e INMET
+            // NASA POWER real: médias dos 90 dias anteriores à coleta (satélite)
+            if ($fonteEscolhida === 'nasa') {
+                $nasa = buscarNASACompleto(
+                    $lat, $lon,
+                    str_replace('-', '', $data_inicio),
+                    str_replace('-', '', $data_fim)
+                );
+                if ($nasa) {
+                    $medias = array_merge($nasa, [
+                        'periodo_inicio' => $data_inicio,
+                        'periodo_fim'    => $data_fim,
+                        'dias_periodo'   => $nasa['dias_com_dados'],
+                        'fonte'          => 'NASA POWER (satélite — 90 dias anteriores à coleta)',
+                    ]);
+                } else {
+                    // NASA indisponível → cai para simulado (com aviso)
+                    $fonteEscolhida = 'simulado';
+                    $medias = null;
+                }
+            }
+
+            // INMET ainda não implementado → simulado
+            if ($fonteEscolhida === 'inmet') {
                 $fonteEscolhida = 'simulado';
                 $medias = null;
             }
@@ -404,6 +522,9 @@ try {
                 ];
             }
             
+            // Estação predominante nos 90 dias (independe da fonte dos números)
+            $estInfo = estacaoPredominante($data_inicio, $data_fim);
+
             jsonResponse([
                 'sucesso' => true,
                 'temperatura_media' => $medias['temperatura_media'],
@@ -420,7 +541,11 @@ try {
                 'periodo_inicio' => $medias['periodo_inicio'],
                 'periodo_fim' => $medias['periodo_fim'],
                 'dias_periodo' => $medias['dias_periodo'],
-                'fonte' => $medias['fonte'] ?? 'Não especificado'
+                'fonte' => $medias['fonte'] ?? 'Não especificado',
+                'estacao_predominante'  => $estInfo['estacao'] ?? null,
+                'estacao_dias'          => $estInfo['dias_predominante'] ?? null,
+                'estacao_total_dias'    => $estInfo['total_dias'] ?? null,
+                'estacao_distribuicao'  => $estInfo['distribuicao'] ?? null,
             ]);
             break;
 

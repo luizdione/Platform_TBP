@@ -3,12 +3,17 @@
 > Documento de memória para o agente **professor_tpb** orquestrar análises de dados e
 > melhorias gráficas/estatísticas no futuro. Mantenha este arquivo atualizado a cada
 > mudança relevante (nova tabela, novo gráfico, novo achado de dado, novo commit).
-> **Última atualização:** 2026-06-26.
+> **Última atualização:** 2026-07-07.
 
-> **Estado atual (2026-06-26):** `relatorio_cientifico.php` + `processa_formulario.php` (commits
+> **Estado atual (2026-07-07):** `relatorio_cientifico.php` + `processa_formulario.php` (commits
 > até `47f075f`) **publicados na Hostinger** pelo usuário. **Fazenda IFRJ Pinheiral (local 6)
 > resolvida:** coletas registradas via `forms.php` (data 2026-02-23, estação Verão) + carga
-> climática manual rodada → passa a constar em `v_dados_cientificos`. Partir deste estado.
+> climática manual rodada → passa a constar em `v_dados_cientificos`.
+>
+> **Pendentes de upload na Hostinger (não publicados):**
+> 1. `relatorio_cientifico.php` — remoção do portão de senha (commit `465b72a`).
+> 2. `forms.php` + `api_clima.php` + `processa_formulario.php` — **auto-cálculo climático** na
+>    aba "Dados Climáticos" (NASA POWER 90 dias + estação predominante). Ver §7 último commit.
 
 ---
 
@@ -103,6 +108,8 @@ Validada com **45 testes** contra valores de referência (ver §9). Funções di
 | `549da03` | 2026-06-26 | **Roadmap item 1:** paleta **Okabe-Ito** (CVD-safe) — `$OKABE_ITO`/`$cores` (g1, g2) + `cmapEstado` (g9a, cinza p/ "coleta única"); helper `corBorda()` escurece o amarelo `#F0E442`→`#B59E00` (borda/linha) p/ contraste. |
 | `e23e46b` | 2026-06-26 | **Roadmap item 3:** novo **lasagna plot g9c** (linha=animal, coluna=onda estação×ano, cor=status). `$sqlCo` ganha `MAX(estacao)`; `$animais` guarda estacao/ano/fazenda (helper `estacaoDeData()` p/ fallback); render canvas custom `renderLasagna()` + tooltip. ⚠️ `$sqlCo` alimenta g8 e g12 — re-testados, intactos. |
 | `12c69b2` | 2026-06-26 | **Ajustes visuais:** largura das barras g7a/g9a/g9b (`maxBarThickness` 56/64/56 + `categoryPercentage` 0.6); **g11 ROC** reformulado (1 dataset por critério, cor Okabe-Ito + `pointStyle` distinto + legenda; removido `rocLabelPlugin`; nota explicativa; canvas 440px); **g4/g5/g6** teto Y abre folga até 115% só quando o pico+IC95% encosta em 100 (whisker superior aparece inteiro), prevalência baixa mantém teto justo, trend recortada. |
+| `465b72a` | 2026-07-02 | **Relatório sem senha:** remove o portão `$_SESSION['relatorio_auth']` (acesso livre para colaborador). ⚠️ pendente de upload. |
+| `02e10f4` | 2026-07-07 | **Auto-cálculo climático (aba Dados Climáticos do `forms.php`).** (1) `api_clima.php`: `calcular_variacoes` com fonte **NASA** agora busca de verdade (nova `buscarNASACompleto()` — T2M/MIN/MAX, PRECTOTCORR, RH2M dos 90 dias) em vez de cair em simulado; adiciona `estacaoPredominante()` (contagem dia-a-dia, HS) e devolve `estacao_predominante`+distribuição. (2) `forms.php`: NASA vira fonte padrão; **auto-dispara** o cálculo (debounce) ao ter local+data; badge **"Estação predominante (90 dias)"** client-side instantâneo (`classificarEstacaoPredominante()`); campo precipitação passa a guardar o **total acumulado**; hidden `estacao` no POST; **fix de bug latente** — `getElementById('data_registro')` (inexistente) lançava TypeError na linha ~1353 e **interrompia todo o bloco `<script>`** → agora null-safe. (3) `processa_formulario.php`: estação da coleta fictícia passa a ser a **predominante dos 90 dias** (HS, `estacaoPredominante90Dias()`) em vez do trimestre errado (Jan-Mar=Verão); respeita o `estacao` do POST. Validado: `php -l` nos 3, `node --check` do bloco JS, teste unitário de estação (6/6), render Playwright do badge (85/91 Verão). ⚠️ pendente de upload. |
 
 ## 8. Gráficos atuais do relatório (mapa rápido)
 
@@ -130,6 +137,10 @@ Validada com **45 testes** contra valores de referência (ver §9). Funções di
 - **EPV baixo no início:** logística é exploratória; pode haver **separação** (especialmente *T. vivax*, raro) ⇒ a função retorna null e a seção mostra "modelo não estimado" (futuro: correção de Firth).
 - **Fazenda some das análises:** se a fazenda não tem linhas em **`coletas`** (e/ou sem clima), ela **não aparece** na view. Foi o caso de **Pinheiral** (animais em `animais_completos` mas 0 em `coletas`; resolvido registrando coletas pelo `forms.php`). Diagnóstico padrão: comparar `locais` × `v_dados_cientificos` (GROUP BY fazenda) × `coletas` (via `animal_id`) × `dados_climaticos`.
 - **`coletas.local_id` pode ser NULL** — vincular sempre por `animal_id → animais.local_id` (o pipeline usa `COALESCE(a.local_id, c.local_id)`).
+- **Duas semânticas de `estacao` (não confundir):** (a) na **aba Coletas/Amostras** a estação é a do **evento** (mês da data de coleta, mapeamento HS de mês único, JS l.~1421). (b) na **aba Dados Climáticos** a estação é a **predominante da janela de 90 dias** (exposição climática) — contada dia-a-dia (`estacaoPredominante`/`estacaoPredominante90Dias`, HS). São conceitos diferentes e propositais. O relatório lê `coletas.estacao`; a coleta fictícia "CLIMA-MANUAL" criada pela aba de clima grava a predominante.
+- **Mapeamento sazonal HS canônico:** Verão=12,1,2 · Outono=3,4,5 · Inverno=6,7,8 · Primavera=9,10,11. (O bloco antigo em `processa_formulario.php` usava trimestres — Jan-Mar=Verão — **errado p/ HS**; corrigido.)
+- **`api_clima.php?action=calcular_variacoes&fonte=nasa`** agora busca NASA de verdade (antes caía sempre em simulado). Fontes: `nasa` (real), `banco` (usa `dados_climaticos` já gravado), `simulado` (fallback). `inmet` ainda não implementado → simulado.
+- **Coluna opcional `dados_climaticos.estacao`:** não é obrigatória (a classificação vive em `coletas.estacao`). Se quiser gravá-la também na tabela de clima, rodar `ALTER TABLE dados_climaticos ADD COLUMN estacao VARCHAR(20) NULL;` e estender o INSERT (hoje não escreve essa coluna, para não exigir migração).
 - **Datas plurianuais:** já há coletas em **2026** (ex.: Pinheiral 2026-02-23). Qualquer filtro de ano fixo em 2025 na view excluiria 2026 — atenção ao revisar a definição da view.
 - **Fragilidade da view:** o `JOIN` com `dados_climaticos` pode apagar fazendas sem clima. Melhoria pendente: trocar por **`LEFT JOIN`** (precisa do texto da view via Exportar do phpMyAdmin). Itens sem clima ficam fora só da *correlação climática*.
 - **Sem banco no ambiente Claude:** validar PHP com `php -l`; renderizar com **mock PDO** (`config.php` falso + `FakePDO`) + `php` CLI; conferir gráficos com **Playwright** (Chromium em `/opt/pw-browsers/chromium-1194/...`, usar proxy). Math validada por testes unitários isolados.

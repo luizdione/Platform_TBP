@@ -492,6 +492,37 @@ function processarResultadoLAMP($pdo, $dados) {
     return ['sucesso' => true, 'id' => $pdo->lastInsertId()];
 }
 
+// ============================================
+// Classificação sazonal (Hemisfério Sul) por mês
+// ============================================
+function estacaoDoMesSH($mes) {
+    $mes = (int)$mes;
+    if (in_array($mes, [12, 1, 2], true)) return 'Verão';
+    if (in_array($mes, [3, 4, 5], true))  return 'Outono';
+    if (in_array($mes, [6, 7, 8], true))  return 'Inverno';
+    return 'Primavera'; // 9, 10, 11
+}
+
+// Estação predominante nos 90 dias anteriores (inclusive) à data da coleta.
+// Conta dia a dia a que estação cada dia pertence e devolve a de maior contagem.
+function estacaoPredominante90Dias($dataColeta) {
+    try {
+        $fim = new DateTime($dataColeta);
+    } catch (Exception $e) {
+        return estacaoDoMesSH((int)date('n', strtotime($dataColeta)));
+    }
+    $ini = (clone $fim)->modify('-90 days');
+    $dist = ['Verão' => 0, 'Outono' => 0, 'Inverno' => 0, 'Primavera' => 0];
+    $cursor = clone $ini;
+    $umDia = new DateInterval('P1D');
+    while ($cursor <= $fim) {
+        $dist[estacaoDoMesSH((int)$cursor->format('n'))]++;
+        $cursor->add($umDia);
+    }
+    arsort($dist);
+    return array_key_first($dist);
+}
+
 function processarDadosClimaticos($pdo, $dados) {
     // Compatibilidade: aceita tanto 'data_coleta' quanto 'data_registro'
     $dataColeta = $dados['data_coleta'] ?? $dados['data_registro'] ?? null;
@@ -546,12 +577,15 @@ function processarDadosClimaticos($pdo, $dados) {
             $animalId = $animalExistente['id'];
         }
 
-        // Determinar estação
-        $mes = (int)date('m', strtotime($dataColeta));
-        if ($mes >= 1 && $mes <= 3) $estacao = 'Verão';
-        elseif ($mes >= 4 && $mes <= 6) $estacao = 'Outono';
-        elseif ($mes >= 7 && $mes <= 9) $estacao = 'Inverno';
-        else $estacao = 'Primavera';
+        // Estação categórica do período: usa a estação predominante nos 90 dias
+        // anteriores (Hemisfério Sul). Se o formulário enviou a classificação
+        // (campo 'estacao'), respeita-a; senão calcula no servidor.
+        $estacoesValidas = ['Verão', 'Outono', 'Inverno', 'Primavera'];
+        if (!empty($dados['estacao']) && in_array($dados['estacao'], $estacoesValidas, true)) {
+            $estacao = $dados['estacao'];
+        } else {
+            $estacao = estacaoPredominante90Dias($dataColeta);
+        }
 
         // Criar coleta fictícia
         $stmtColetaInsert = $pdo->prepare("
