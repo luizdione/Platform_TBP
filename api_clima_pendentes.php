@@ -59,9 +59,50 @@ function buscarNASApend($lat, $lng, $dataInicio, $dataFim) {
     ];
 }
 
+// ============================================
+// Classificação sazonal (Hemisfério Sul) por mês
+// ============================================
+function estacaoDoMesSH($mes) {
+    $mes = (int)$mes;
+    if (in_array($mes, [12, 1, 2], true)) return 'Verão';
+    if (in_array($mes, [3, 4, 5], true))  return 'Outono';
+    if (in_array($mes, [6, 7, 8], true))  return 'Inverno';
+    return 'Primavera'; // 9, 10, 11
+}
+
+// Estação predominante entre $dataInicio e $dataFim (inclusive), contando dia a dia.
+function estacaoPredominante($dataInicio, $dataFim) {
+    try {
+        $ini = new DateTime($dataInicio);
+        $fim = new DateTime($dataFim);
+    } catch (Exception $e) {
+        return null;
+    }
+    if ($fim < $ini) { $tmp = $ini; $ini = $fim; $fim = $tmp; }
+    $dist = ['Verão' => 0, 'Outono' => 0, 'Inverno' => 0, 'Primavera' => 0];
+    $cursor = clone $ini;
+    $umDia = new DateInterval('P1D');
+    while ($cursor <= $fim) {
+        $dist[estacaoDoMesSH((int)$cursor->format('n'))]++;
+        $cursor->add($umDia);
+    }
+    arsort($dist);
+    return array_key_first($dist);
+}
+
 try {
     $pdo = getDBConnection();
     $action = $_GET['action'] ?? 'calcular';
+
+    // A gravação da estação predominante depende de a coluna existir na tabela.
+    // Detecta em runtime para não quebrar caso o ALTER ainda não tenha sido rodado.
+    $temColEstacao = false;
+    try {
+        $chk = $pdo->query("SHOW COLUMNS FROM dados_climaticos LIKE 'estacao_predominante'");
+        $temColEstacao = ($chk && $chk->fetch() !== false);
+    } catch (Exception $e) {
+        $temColEstacao = false;
+    }
 
     // Coletas com data e coordenadas, sem clima processado
     $sqlPendentes = "
@@ -92,6 +133,11 @@ try {
 
     $coletas = $pdo->query($sqlPendentes)->fetchAll(PDO::FETCH_ASSOC);
 
+    // Colunas/placeholders extras da estação (só quando a coluna existe)
+    $colEstacao = $temColEstacao ? ', estacao_predominante' : '';
+    $valEstacao = $temColEstacao ? ', ?' : '';
+    $updEstacao = $temColEstacao ? ",\n            estacao_predominante = VALUES(estacao_predominante)" : '';
+
     $upsert = $pdo->prepare("
         INSERT INTO dados_climaticos
             (coleta_id, local_id, data_coleta, latitude, longitude,
@@ -99,8 +145,8 @@ try {
              temperatura_media, temperatura_minima, temperatura_maxima,
              pluviometria_total, pluviometria_media,
              umidade_media, umidade_minima, umidade_maxima,
-             fonte, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NASA_POWER', 'processado')
+             fonte, status{$colEstacao})
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NASA_POWER', 'processado'{$valEstacao})
         ON DUPLICATE KEY UPDATE
             temperatura_media = VALUES(temperatura_media),
             temperatura_minima = VALUES(temperatura_minima),
@@ -111,7 +157,7 @@ try {
             umidade_minima = VALUES(umidade_minima),
             umidade_maxima = VALUES(umidade_maxima),
             fonte = 'NASA_POWER',
-            status = 'processado'
+            status = 'processado'{$updEstacao}
     ");
 
     $sucesso = 0; $falha = 0; $detalhes = [];
@@ -121,14 +167,19 @@ try {
         $r = buscarNASApend($c['latitude'], $c['longitude'], $dataIni, $dataFim);
         if (!$r) { $falha++; continue; }
         try {
-            $upsert->execute([
+            $params = [
                 $c['coleta_id'], $c['local_id'], $c['data_coleta'],
                 $c['latitude'], $c['longitude'],
                 $dataIni, $dataFim,
                 $r['t_media'], $r['t_min'], $r['t_max'],
                 $r['p_total'], $r['p_media'],
                 $r['r_media'], $r['r_min'], $r['r_max'],
-            ]);
+            ];
+            // Estação predominante dos 90 dias (só grava se a coluna existir)
+            if ($temColEstacao) {
+                $params[] = estacaoPredominante($dataIni, $dataFim);
+            }
+            $upsert->execute($params);
             $sucesso++;
         } catch (Exception $e) {
             $falha++;
@@ -138,11 +189,15 @@ try {
     }
 
     echo json_encode([
-        'sucesso'      => true,
-        'sucesso_qtd'  => $sucesso,
-        'falha_qtd'    => $falha,
-        'total'        => count($coletas),
-        'detalhes'     => $detalhes,
+        'sucesso'                     => true,
+        'sucesso_qtd'                 => $sucesso,
+        'falha_qtd'                   => $falha,
+        'total'                       => count($coletas),
+        'estacao_predominante_gravada'=> $temColEstacao,
+        'aviso_estacao'               => $temColEstacao ? null
+            : "Coluna 'estacao_predominante' ausente em dados_climaticos — clima gravado, estação não. "
+            . "Rode: ALTER TABLE dados_climaticos ADD COLUMN estacao_predominante VARCHAR(20) NULL;",
+        'detalhes'                    => $detalhes,
     ]);
 } catch (Exception $e) {
     http_response_code(500);
