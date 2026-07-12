@@ -158,6 +158,34 @@ if (isset($_POST['action'])) {
         $stmt->execute($params);
         $animais = $stmt->fetchAll();
 
+        // Detalhe por coleta (1 linha por animal x data) — agrupa as coletas do mesmo animal na tabela do laudo
+        if ($temViewLaudo) {
+            $sqlDet = "SELECT codigo_animal, data_coleta,
+                              MAX(pcr_babesia) AS pcr_bb, MAX(pcr_anaplasma) AS pcr_am,
+                              MAX(pcr_trypanosoma) AS pcr_tv, MAX(lamp_babesia_18s) AS lamp_18s,
+                              MAX(lamp_babesia_cytb) AS lamp_cytb
+                       FROM v_dados_cientificos
+                       WHERE data_coleta BETWEEN ? AND ? AND codigo_animal IN ($placeholders)
+                       GROUP BY codigo_animal, data_coleta
+                       ORDER BY codigo_animal, data_coleta";
+        } else {
+            $sqlDet = "SELECT ac.codigo_animal, ac.data_coleta,
+                              MAX(ac.pcr_babesia) AS pcr_bb, MAX(ac.pcr_anaplasma) AS pcr_am,
+                              MAX(ac.pcr_trypanosoma) AS pcr_tv, MAX(ac.lamp_babesia_18s) AS lamp_18s,
+                              MAX(ac.lamp_babesia_cytb) AS lamp_cytb
+                       FROM animais_completos ac
+                       LEFT JOIN locais l ON l.id = ac.local_id
+                       WHERE l.ativo = 1 $whereExtraLaudo AND ac.data_coleta BETWEEN ? AND ? AND ac.codigo_animal IN ($placeholders)
+                       GROUP BY ac.codigo_animal, ac.data_coleta
+                       ORDER BY ac.codigo_animal, ac.data_coleta";
+        }
+        $stmtDet = $pdo->prepare($sqlDet);
+        $stmtDet->execute(array_merge([$inicio, $fim], $codigos));
+        $coletasPorAnimal = [];
+        foreach ($stmtDet->fetchAll() as $rowDet) {
+            $coletasPorAnimal[$rowDet['codigo_animal']][] = $rowDet;
+        }
+
         // Estatisticas para conclusao
         $totalAnim = count($animais);
         $nPos_bb = 0; $nPos_am = 0; $nPos_tv = 0; $nPos_18s = 0; $nPos_cytb = 0;
@@ -226,12 +254,24 @@ if (isset($_POST['action'])) {
                 <th>PCR<br><i>B. bovis</i></th>
                 <th>PCR<br><i>A. marginale</i></th>
                 <th>PCR<br><i>T. vivax</i></th>
-                <th>LAMP<br>18S</th>
-                <th>LAMP<br>CytB</th>
+                <th>LAMP<br>18S B.bovis</th>
+                <th>LAMP<br>CytB B.bovis</th>
                 <th>Conclusão por animal</th>
             </tr></thead>
             <tbody>
             <?php foreach ($animais as $a):
+                $cod = $a['codigo_animal'];
+                // Coletas detalhadas deste animal (fallback: 1 linha consolidada, se o detalhe faltar)
+                $coletas = $coletasPorAnimal[$cod] ?? [];
+                if (empty($coletas)) {
+                    $coletas = [[
+                        'data_coleta' => $a['ultima'] ?? null,
+                        'pcr_bb' => $a['pcr_bb'], 'pcr_am' => $a['pcr_am'], 'pcr_tv' => $a['pcr_tv'],
+                        'lamp_18s' => $a['lamp_18s'], 'lamp_cytb' => $a['lamp_cytb'],
+                    ]];
+                }
+                $nLinhas = count($coletas);
+                // Conclusao consolidada por animal (agregada por MAX, igual antes)
                 $bb_qualquer = ((int)$a['pcr_bb']) || ((int)$a['lamp_18s']) || ((int)$a['lamp_cytb']);
                 $am = (int)$a['pcr_am']; $tv = (int)$a['pcr_tv'];
                 $pos = [];
@@ -241,19 +281,25 @@ if (isset($_POST['action'])) {
                 $conclusao = empty($pos)
                     ? '<span class="lau-conc-neg">Negativo para os hemoparasitas testados</span>'
                     : '<span class="lau-conc-pos">Positivo para: ' . implode(', ', $pos) . '</span>';
+                $linha = 0;
+                foreach ($coletas as $c): $linha++;
             ?>
-              <tr>
-                <td><b><?= htmlspecialchars($a['codigo_animal']) ?></b></td>
-                <td><?= htmlspecialchars($a['sexo']) ?></td>
-                <td class="num"><?= (int)$a['n_amostras'] ?></td>
-                <td><?= $fmtData($a['ultima']) ?></td>
-                <td><?= $statusBadge($a['pcr_bb']) ?></td>
-                <td><?= $statusBadge($a['pcr_am']) ?></td>
-                <td><?= $statusBadge($a['pcr_tv']) ?></td>
-                <td><?= $statusBadge($a['lamp_18s']) ?></td>
-                <td><?= $statusBadge($a['lamp_cytb']) ?></td>
-                <td><?= $conclusao ?></td>
+              <tr class="<?= $linha === 1 ? 'lau-grupo-ini' : '' ?>">
+                <?php if ($linha === 1): ?>
+                  <td rowspan="<?= $nLinhas ?>"><b><?= htmlspecialchars($cod) ?></b><?php if ($nLinhas > 1): ?><br><small style="color:#666;font-weight:normal;">(<?= $nLinhas ?> coletas)</small><?php endif; ?></td>
+                  <td rowspan="<?= $nLinhas ?>"><?= htmlspecialchars($a['sexo']) ?></td>
+                <?php endif; ?>
+                <td><?= $fmtData($c['data_coleta']) ?></td>
+                <td><?= $statusBadge($c['pcr_bb']) ?></td>
+                <td><?= $statusBadge($c['pcr_am']) ?></td>
+                <td><?= $statusBadge($c['pcr_tv']) ?></td>
+                <td><?= $statusBadge($c['lamp_18s']) ?></td>
+                <td><?= $statusBadge($c['lamp_cytb']) ?></td>
+                <?php if ($linha === 1): ?>
+                  <td rowspan="<?= $nLinhas ?>"><?= $conclusao ?></td>
+                <?php endif; ?>
               </tr>
+            <?php endforeach; ?>
             <?php endforeach; ?>
             </tbody>
           </table>
@@ -792,7 +838,7 @@ if ($fonte === 'v_dados_cientificos') {
             GROUP BY codigo_animal, data_coleta
         ) v_dedup
         GROUP BY estacao
-        ORDER BY FIELD(estacao,'Verão','Outono','Inverno','Primavera')
+        ORDER BY FIELD(estacao,'Inverno','Primavera','Verão','Outono')
     ")->fetchAll();
 } else {
     $prevEst = $pdo->query("
@@ -813,7 +859,7 @@ if ($fonte === 'v_dados_cientificos') {
         LEFT JOIN locais l ON l.id = ac.local_id
         WHERE l.ativo = 1 $whereExtra
         GROUP BY estacao
-        ORDER BY FIELD(estacao,'Verão','Outono','Inverno','Primavera')
+        ORDER BY FIELD(estacao,'Inverno','Primavera','Verão','Outono')
     ")->fetchAll();
 }
 
@@ -822,8 +868,8 @@ $parasitas = [
     'pos_pcr_babesia'     => 'PCR B. bovis',
     'pos_pcr_anaplasma'   => 'PCR A. marginale',
     'pos_pcr_trypanosoma' => 'PCR T. vivax',
-    'pos_lamp_18s'        => 'LAMP 18S',
-    'pos_lamp_cytb'       => 'LAMP CytB',
+    'pos_lamp_18s'        => 'LAMP 18S B.bovis',
+    'pos_lamp_cytb'       => 'LAMP CytB B.bovis',
 ];
 // Paleta Okabe-Ito (CVD-safe, Wong B. Nat Methods 2011) — distinguivel em
 // protanopia/deuteranopia/tritanopia. Item 1 do roadmap (AUDITORIA sec.5.2).
@@ -1526,8 +1572,8 @@ $testes5 = [
     'pcr_bb'   => ['col'=>'pcr_babesia',     'rotulo'=>'PCR B. bovis'],
     'pcr_am'   => ['col'=>'pcr_anaplasma',   'rotulo'=>'PCR A. marginale'],
     'pcr_tv'   => ['col'=>'pcr_trypanosoma', 'rotulo'=>'PCR T. vivax'],
-    'lamp_18s' => ['col'=>'lamp_babesia_18s','rotulo'=>'LAMP 18S'],
-    'lamp_cyt' => ['col'=>'lamp_babesia_cytb','rotulo'=>'LAMP CytB'],
+    'lamp_18s' => ['col'=>'lamp_babesia_18s','rotulo'=>'LAMP 18S B.bovis'],
+    'lamp_cyt' => ['col'=>'lamp_babesia_cytb','rotulo'=>'LAMP CytB B.bovis'],
 ];
 $keysT = array_keys($testes5);
 $matrizK   = []; // [linha][coluna] = kappa (ponto)
@@ -1661,6 +1707,7 @@ foreach ($keysT as $k1) {
   .lau-neg{color:#557;font-size:.82em}
   .lau-conc-pos{color:#a00;font-weight:600;font-size:.85em}
   .lau-conc-neg{color:#2f855a;font-size:.85em}
+  .laudo-doc .laudo-tabela tr.lau-grupo-ini td{border-top:2px solid #1F4E78}
   .laudo-doc .laudo-conclusao{text-align:justify;margin-bottom:1.4em;font-size:.96em}
   .laudo-doc .laudo-conclusao h3{color:#1F4E78;margin:1em 0 .4em;font-family:'Segoe UI',Arial,sans-serif;
     font-size:1em;border-bottom:1px solid #cbd5e0;padding-bottom:.2em}
@@ -1879,7 +1926,7 @@ foreach ($keysT as $k1) {
   <caption style="caption-side:top;text-align:left;font-weight:bold;padding:.3em 0;color:#1F4E78;">Tabela 2 - Prevalencia por fazenda x parasita (IC95% Wilson)</caption>
   <thead><tr><th>Fazenda</th><th class="num">n</th>
     <th>PCR B. bovis</th><th>PCR A. marginale</th><th>PCR T. vivax</th>
-    <th>LAMP 18S</th><th>LAMP CytB</th></tr></thead>
+    <th>LAMP 18S B.bovis</th><th>LAMP CytB B.bovis</th></tr></thead>
   <tbody>
   <?php foreach ($prev as $r):
       $n=(int)$r['n'];
@@ -1918,7 +1965,7 @@ foreach ($keysT as $k1) {
   <caption style="caption-side:top;text-align:left;font-weight:bold;padding:.3em 0;color:#1F4E78;">Tabela 3 - Prevalencia por estacao do ano</caption>
   <thead><tr><th>Estacao</th><th class="num">n</th>
     <th>PCR B. bovis</th><th>PCR A. marginale</th><th>PCR T. vivax</th>
-    <th>LAMP 18S</th><th>LAMP CytB</th></tr></thead>
+    <th>LAMP 18S B.bovis</th><th>LAMP CytB B.bovis</th></tr></thead>
   <tbody>
   <?php foreach ($prevEst as $r):
       $n=(int)$r['n']; $cells=['pos_pcr_babesia','pos_pcr_anaplasma','pos_pcr_trypanosoma','pos_lamp_18s','pos_lamp_cytb']; ?>
@@ -1983,7 +2030,7 @@ $temAnyEst = !empty($estPrev);
     <div class="linha"><span>IC95% Wilson</span><b style="font-size:.85em"><?= fmt_ci($wPCR) ?></b></div>
   </div>
   <div class="met-card lamp18s">
-    <div class="titulo">LAMP 18S</div>
+    <div class="titulo">LAMP 18S B.bovis</div>
     <div class="linha"><span>Positivos</span><b><?= $nLAMP18S ?> / <?= $nTotalComp ?></b></div>
     <div class="linha"><span>Prevalência</span><b><?= fmt_pct($wLAMP18S['p']) ?></b></div>
     <div class="linha"><span>IC95% Wilson</span><b style="font-size:.85em"><?= fmt_ci($wLAMP18S) ?></b></div>
@@ -1993,7 +2040,7 @@ $temAnyEst = !empty($estPrev);
       <span class="interpret"><?= interpretKappa($kap_18) ?></span></b></div>
   </div>
   <div class="met-card lampcytb">
-    <div class="titulo">LAMP CytB</div>
+    <div class="titulo">LAMP CytB B.bovis</div>
     <div class="linha"><span>Positivos</span><b><?= $nLAMPCytB ?> / <?= $nTotalComp ?></b></div>
     <div class="linha"><span>Prevalência</span><b><?= fmt_pct($wLAMPCyt['p']) ?></b></div>
     <div class="linha"><span>IC95% Wilson</span><b style="font-size:.85em"><?= fmt_ci($wLAMPCyt) ?></b></div>
@@ -2022,7 +2069,7 @@ $temAnyEst = !empty($estPrev);
   </tr></thead>
   <tbody>
     <tr>
-      <td><b>PCR vs LAMP 18S</b></td>
+      <td><b>PCR vs LAMP 18S B.bovis</b></td>
       <td class="num"><?= $pp_18 ?></td><td class="num"><?= $pn_18 ?></td>
       <td class="num"><?= $np_18 ?></td><td class="num"><?= $nn_18 ?></td>
       <td class="num"><?= fmt_pct($sens_18) ?></td>
@@ -2034,7 +2081,7 @@ $temAnyEst = !empty($estPrev);
       <td><?= interpretKappa($kap_18) ?></td>
     </tr>
     <tr>
-      <td><b>PCR vs LAMP CytB</b></td>
+      <td><b>PCR vs LAMP CytB B.bovis</b></td>
       <td class="num"><?= $pp_ct ?></td><td class="num"><?= $pn_ct ?></td>
       <td class="num"><?= $np_ct ?></td><td class="num"><?= $nn_ct ?></td>
       <td class="num"><?= fmt_pct($sens_ct) ?></td>
@@ -2046,7 +2093,7 @@ $temAnyEst = !empty($estPrev);
       <td><?= interpretKappa($kap_ct) ?></td>
     </tr>
     <tr>
-      <td><b>LAMP 18S vs LAMP CytB</b></td>
+      <td><b>LAMP 18S B.bovis vs LAMP CytB B.bovis</b></td>
       <td class="num"><?= $pp_lc ?></td><td class="num"><?= $pn_lc ?></td>
       <td class="num"><?= $np_lc ?></td><td class="num"><?= $nn_lc ?></td>
       <td class="num" colspan="4" style="color:#666">(comparação entre LAMPs)</td>
@@ -2384,7 +2431,7 @@ $temAnyEst = !empty($estPrev);
   </tr></thead>
   <tbody>
     <tr>
-      <td><b>LAMP 18S</b></td>
+      <td><b>LAMP 18S B.bovis</b></td>
       <td class="num"><?= $d18s['n'] ?></td>
       <td class="num"><?= $d18s['n']>0 ? "{$d18s['media']} ± {$d18s['sd']}" : '-' ?></td>
       <td class="num"><?= $d18s['n']>0 ? "{$d18s['mediana']} [{$d18s['q1']}-{$d18s['q3']}]" : '-' ?></td>
@@ -2394,7 +2441,7 @@ $temAnyEst = !empty($estPrev);
       <td class="num"><?= $intens18s['Fraco'] ?></td>
     </tr>
     <tr>
-      <td><b>LAMP CytB</b></td>
+      <td><b>LAMP CytB B.bovis</b></td>
       <td class="num"><?= $dCytb['n'] ?></td>
       <td class="num"><?= $dCytb['n']>0 ? "{$dCytb['media']} ± {$dCytb['sd']}" : '-' ?></td>
       <td class="num"><?= $dCytb['n']>0 ? "{$dCytb['mediana']} [{$dCytb['q1']}-{$dCytb['q3']}]" : '-' ?></td>
@@ -2755,6 +2802,93 @@ e clique em "⬇️ Carregar 90d clima na NASA POWER" para popular dados_climati
         verde = abaixo da mediana, amarelo = mediana, vermelho = acima da mediana. Cinza = sem dado.
     </p>
 </div>
+
+<!-- ============================================================
+     SEÇÃO: Métodos & Legendas (documento para publicação, exportável em PDF)
+     ============================================================ -->
+<section class="metodos-section" style="background:#fff;border:2px solid #1F4E78;border-radius:14px;padding:1.4em 1.6em;margin:2em 0;box-shadow:0 4px 14px rgba(31,78,120,.12);">
+  <h2 style="border:none;margin:0 0 .3em;display:flex;align-items:center;gap:.4em;">📄 Métodos &amp; Legendas — documento para publicação</h2>
+  <p class="sub" style="color:#555;font-size:.92em;margin:0 0 1em;">
+    Texto de <b>Materiais e Métodos</b> (em português) e as <b>legendas de todas as tabelas e figuras</b> deste relatório,
+    reunidos para redação científica. Clique para salvar em PDF (abre uma janela de impressão → escolha “Salvar como PDF”).
+  </p>
+  <div style="display:flex;gap:.6em;flex-wrap:wrap;margin-bottom:1em;">
+    <button class="btn-laudo" onclick="salvarMetodosPDF()" style="background:#1F4E78;color:#fff;border:0;border-radius:8px;padding:10px 18px;font-weight:700;cursor:pointer;font-size:1.05rem;">🖨️ Salvar Métodos &amp; Legendas (PDF)</button>
+  </div>
+
+  <div id="metodos-doc-conteudo" class="metodos-doc" style="border-top:1px solid #e2e8f0;padding-top:1em;color:#222;line-height:1.6;text-align:justify;">
+    <h1 style="font-size:1.5rem;color:#1F4E78;">Materiais, Métodos e Legendas</h1>
+    <div class="doc-meta" style="color:#555;font-size:.88rem;margin-bottom:1em;">
+      Laboratório de Genética Molecular (LGM) — Instituto Federal do Rio de Janeiro, campus Rio de Janeiro (IFRJ/CRJ).
+      Vigilância molecular da Tristeza Parasitária Bovina (TPB). Documento gerado em <?= date('d/m/Y') ?>.
+    </div>
+
+    <h2 style="color:#1F4E78;">1. Materiais e Métodos</h2>
+
+    <h3 style="color:#2c5282;">1.1. Delineamento e amostra</h3>
+    <p>Realizou-se estudo epidemiológico observacional de delineamento <b>longitudinal</b>, com coletas seriadas trimestrais em bovinos de <?= $nFazendas ?? '—' ?> propriedades rurais. A unidade amostral é o par <i>animal × data de coleta</i>; assim, cada animal contribui com uma ou mais amostras ao longo do acompanhamento. O conjunto analisado compreendeu <?= $nAnimais ?? '—' ?> animais, <?= $totalColetas ?? '—' ?> coletas (visitas de campo) e <?= $totalAmostras ?? '—' ?> amostras. Foram excluídos registros de simulação e códigos de controle climático, mantendo-se apenas dados de campo válidos.</p>
+
+    <h3 style="color:#2c5282;">1.2. Diagnóstico molecular</h3>
+    <p>A detecção dos hemoparasitas do complexo TPB foi realizada por <b>PCR convencional</b> para <i>Babesia bovis</i>, <i>Anaplasma marginale</i> e <i>Trypanosoma vivax</i>, e complementada por <b>PCR-LAMP isotérmica</b> dirigida a <i>Babesia bovis</i>, com dois alvos independentes: o gene <b>18S rRNA</b> (LAMP 18S B.bovis) e o gene do <b>citocromo B — CytB</b> (LAMP CytB B.bovis). Para o PCR-LAMP registrou-se ainda o tempo de detecção, utilizado como <i>proxy</i> semiquantitativo da carga parasitária (categorizado em intensidade forte, média e fraca).</p>
+
+    <h3 style="color:#2c5282;">1.3. Variáveis climáticas</h3>
+    <p>As variáveis climáticas foram obtidas da base <b>NASA POWER</b> (temperatura média do ar — T2M; precipitação corrigida — PRECTOTCORR; umidade relativa a 2&nbsp;m — RH2M). Para as análises de associação, cada coleta foi caracterizada pela <b>média dos 90 dias anteriores</b> à data de coleta. Para a visualização temporal, utilizaram-se médias <b>semanais</b> por fazenda.</p>
+
+    <h3 style="color:#2c5282;">1.4. Análise estatística</h3>
+    <p>As prevalências foram estimadas como proporções e acompanhadas de <b>intervalos de confiança de 95% pelo método de Wilson</b>. A associação entre estação do ano e positividade foi avaliada por <b>teste qui-quadrado</b>. A concordância entre os métodos moleculares foi quantificada pelo <b>coeficiente κ de Cohen</b> (com IC95%) e a simetria das discordâncias pelo <b>teste de McNemar</b>. Tomando o PCR convencional como referência, calcularam-se <b>sensibilidade, especificidade, valores preditivos positivo (VPP) e negativo (VPN), acurácia</b> e o <b>índice J de Youden</b>. O desempenho global dos critérios de positividade do PCR-LAMP foi resumido por <b>curvas ROC</b> e pela <b>AUC empírica</b> (regra trapezoidal; IC95% de Hanley–McNeil). A associação entre clima e positividade foi explorada por <b>correlação de Spearman</b> (univariada) e por <b>regressão logística multivariável</b> ajustada por mínimos quadrados reponderados iterativamente (IRLS), reportando-se <i>odds ratios</i> (OR) e respectivos IC95%. O componente longitudinal foi descrito por classificação de <b>estados por patógeno</b> e por <b>matriz de transição</b> entre amostras consecutivas de cada animal. Adotou-se nível de significância α = 0,05. Toda a computação estatística foi executada por uma biblioteca de estatística em PHP puro, desenvolvida internamente e validada contra valores de referência, sem dependências externas; os gráficos foram produzidos em Chart.js com a paleta <b>Okabe–Ito</b>, segura para as principais formas de daltonismo.</p>
+
+    <h2 style="color:#1F4E78;">2. Legendas das Tabelas</h2>
+    <p><b>Tabela 1.</b> Caracterização da amostra por fazenda: número de animais, de coletas (visitas) e de amostras (animal × data), proporção de fêmeas e de animais em lactação, idade média (meses) e número de amostras com dado climático associado.</p>
+    <p><b>Tabela 2.</b> Prevalência por fazenda × agente: prevalência (%) de <i>B. bovis</i>, <i>A. marginale</i> e <i>T. vivax</i> por PCR, e de <i>B. bovis</i> por LAMP 18S e LAMP CytB, em cada propriedade, com IC95% pelo método de Wilson.</p>
+    <p><b>Tabela 3.</b> Prevalência por estação do ano (hemisfério sul): prevalência (%) de cada agente por estação — apresentada iniciando no <b>Inverno</b> — com o número de amostras por estação.</p>
+    <p><b>Tabela 4.</b> Métricas de desempenho diagnóstico, com o PCR convencional como referência: verdadeiros e falsos positivos e negativos (VP/FN/FP/VN), sensibilidade, especificidade, VPP, VPN, acurácia e κ de Cohen para PCR × LAMP 18S B.bovis, PCR × LAMP CytB B.bovis e LAMP 18S B.bovis × LAMP CytB B.bovis, com interpretação da concordância.</p>
+    <p><b>Tabela 5.</b> Categorias mutuamente exclusivas de coinfecção: frequência e prevalência (IC95% Wilson) de cada padrão de positividade combinada entre <i>B. bovis</i>, <i>A. marginale</i> e <i>T. vivax</i>.</p>
+    <p><b>Tabela 6.</b> Estados longitudinais por patógeno: distribuição dos animais segundo o padrão observado ao longo das coletas seriadas (por exemplo, sempre negativo, sempre positivo, ou alternância/soroconversão).</p>
+    <p><b>Tabela 7.</b> Matriz de transição N → N+1: frequência das transições de estado (negativo/positivo) entre amostras consecutivas de um mesmo animal.</p>
+    <p><b>Tabela 8.</b> Estatística descritiva do tempo de detecção do PCR-LAMP (proxy de carga parasitária) para os alvos 18S B.bovis e CytB B.bovis: n, média ± desvio-padrão, mediana [Q1–Q3], mínimo–máximo e contagem por intensidade de sinal (forte/média/fraca).</p>
+    <p><b>Tabela 9.</b> Critérios de positividade do PCR-LAMP × PCR convencional: sensibilidade, especificidade, 1 − especificidade e índice J de Youden para quatro critérios (apenas 18S B.bovis; apenas CytB B.bovis; união 18S OU CytB; interseção 18S E CytB), com a AUC empírica (IC95% Hanley–McNeil).</p>
+    <p><b>Tabela 10.</b> Matriz de κ de Cohen: concordância par a par entre os cinco testes moleculares, que fundamenta o heatmap de concordância.</p>
+
+    <h2 style="color:#1F4E78;">3. Legendas das Figuras</h2>
+    <p><b>Gráfico 1.</b> Prevalência (%) por fazenda e por agente, com barras de erro correspondentes ao IC95% (Wilson).</p>
+    <p><b>Gráfico 2.</b> Prevalência (%) por estação do ano (hemisfério sul), com o eixo X iniciando no <b>Inverno</b> (Inverno → Primavera → Verão → Outono).</p>
+    <p><b>Gráfico 3.</b> Número de animais por fazenda.</p>
+    <p><b>Gráfico 4.</b> Relação entre temperatura média do ar (°C; média dos 90 dias anteriores, NASA POWER) e prevalência.</p>
+    <p><b>Gráfico 5.</b> Relação entre precipitação acumulada (mm nos 90 dias anteriores) e prevalência.</p>
+    <p><b>Gráfico 6.</b> Relação entre umidade relativa média (%; 90 dias anteriores) e prevalência.</p>
+    <p><b>Gráfico 7.</b> Comparação metodológica entre PCR convencional e PCR-LAMP (alvos 18S B.bovis e CytB B.bovis) para o diagnóstico de <i>B. bovis</i> (painéis A e B).</p>
+    <p><b>Gráfico 8.</b> Coinfecção entre <i>B. bovis</i>, <i>A. marginale</i> e <i>T. vivax</i> (representação no estilo UpSet, mostrando as interseções de positividade).</p>
+    <p><b>Gráfico 9.</b> Estados longitudinais por patógeno (painel A) e distribuição do número de amostras por animal (painel B).</p>
+    <p><b>Gráfico 9C.</b> <i>Lasagna plot</i>: perfil longitudinal de positividade de cada animal ao longo das coletas.</p>
+    <p><b>Gráfico 10.</b> Histograma do tempo de detecção do PCR-LAMP por alvo (18S B.bovis e CytB B.bovis) (painel A) e distribuição da intensidade do sinal (painel B).</p>
+    <p><b>Gráfico 11.</b> Curva ROC dos critérios de positividade do PCR-LAMP, tendo o PCR convencional como referência; o critério ótimo maximiza o índice J de Youden.</p>
+    <p><b>Gráfico 12.</b> Heatmap da matriz de κ de Cohen (5 × 5) entre os testes moleculares.</p>
+    <p><b>Gráfico 13.</b> <i>Forest plot</i> dos <i>odds ratios</i> climáticos (escala logarítmica) do modelo de regressão logística multivariável.</p>
+    <p><b>Heatmap temporal.</b> Clima semanal por fazenda (T2M, PRECTOTCORR e RH2M; NASA POWER): 9 linhas (3 fazendas × 3 variáveis), com cor normalizada por variável (verde &lt; mediana; amarelo = mediana; vermelho &gt; mediana; cinza = sem dado).</p>
+  </div>
+</section>
+
+<script>
+function salvarMetodosPDF(){
+  var el = document.getElementById('metodos-doc-conteudo');
+  if(!el){ return; }
+  var css = "body{font-family:Georgia,'Times New Roman',serif;color:#111;max-width:800px;margin:24px auto;padding:0 24px;line-height:1.55;font-size:12pt}"
+    + "h1{font-size:18pt;color:#1F4E78;border-bottom:2px solid #1F4E78;padding-bottom:6px;margin-bottom:6px}"
+    + "h2{font-size:14pt;color:#1F4E78;margin-top:22px;border-bottom:1px solid #cbd5e0;padding-bottom:3px}"
+    + "h3{font-size:12pt;color:#2c5282;margin-top:16px}"
+    + ".doc-meta{color:#555;font-size:10pt;margin-bottom:12px}"
+    + "p{margin:7px 0;text-align:justify}"
+    + "i,em{font-style:italic}b,strong{font-weight:bold}"
+    + "@page{margin:2cm}";
+  var w = window.open('', '_blank');
+  if(!w){ alert('Habilite pop-ups para gerar o PDF de Métodos & Legendas.'); return; }
+  w.document.open();
+  w.document.write('<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Métodos e Legendas — Relatório Científico TPB (LGM/IFRJ)</title><style>'+css+'</style></head><body>'+el.innerHTML+'</body></html>');
+  w.document.close();
+  w.focus();
+  setTimeout(function(){ try{ w.print(); }catch(e){} }, 400);
+}
+</script>
 
 </main>
 <footer>Diagnostico TPB - IFRJ - LGM - Pipeline cientifico v1
@@ -3255,7 +3389,7 @@ document.addEventListener('DOMContentLoaded', carregarHeatmapTemporal);
 // TASK 2 - Graficos 7A e 7B: Comparacao metodologica B. bovis
 // =================================================================
 const g7a_data = {
-    labels: ['PCR B. bovis (convencional)', 'LAMP 18S', 'LAMP CytB'],
+    labels: ['PCR B. bovis (convencional)', 'LAMP 18S B.bovis', 'LAMP CytB B.bovis'],
     datasets: [{
         label: 'Amostras positivas',
         data: [<?= $nPCR ?>, <?= $nLAMP18S ?>, <?= $nLAMPCytB ?>],
@@ -3621,8 +3755,8 @@ new Chart(document.getElementById('g10a'), {
     data: {
         labels: hShared.labels,
         datasets: [
-            { label: 'LAMP 18S', data: hShared.a, backgroundColor: '#9BBB59cc', borderColor: '#5C7A2D', borderWidth: 1 },
-            { label: 'LAMP CytB', data: hShared.b, backgroundColor: '#F79646cc', borderColor: '#B85C00', borderWidth: 1 }
+            { label: 'LAMP 18S B.bovis', data: hShared.a, backgroundColor: '#9BBB59cc', borderColor: '#5C7A2D', borderWidth: 1 },
+            { label: 'LAMP CytB B.bovis', data: hShared.b, backgroundColor: '#F79646cc', borderColor: '#B85C00', borderWidth: 1 }
         ]
     },
     options: {
@@ -3645,9 +3779,9 @@ new Chart(document.getElementById('g10b'), {
     data: {
         labels: ['Forte','Médio','Fraco'],
         datasets: [
-            { label: 'LAMP 18S',  data: [intens18s.Forte,  intens18s['Médio'],  intens18s.Fraco],
+            { label: 'LAMP 18S B.bovis',  data: [intens18s.Forte,  intens18s['Médio'],  intens18s.Fraco],
               backgroundColor: '#9BBB59cc', borderColor: '#5C7A2D', borderWidth: 1 },
-            { label: 'LAMP CytB', data: [intensCytb.Forte, intensCytb['Médio'], intensCytb.Fraco],
+            { label: 'LAMP CytB B.bovis', data: [intensCytb.Forte, intensCytb['Médio'], intensCytb.Fraco],
               backgroundColor: '#F79646cc', borderColor: '#B85C00', borderWidth: 1 }
         ]
     },
