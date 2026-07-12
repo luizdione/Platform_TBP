@@ -27,7 +27,7 @@ register_shutdown_function(function() {
 });
 
 require_once __DIR__ . '/../../templates/auth_central.php';
-verificarAutenticacaoCentral();
+exigirArea('diagnostico');
 require_once 'config.php';
 setSecurityHeaders();
 

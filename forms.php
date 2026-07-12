@@ -5,7 +5,7 @@
 // ============================================
 
 require_once __DIR__ . '/../../templates/auth_central.php';
-verificarAutenticacaoCentral();
+exigirArea('diagnostico');
 bloquearSeSomenteLeitura(); // Bloquear acesso para usuários somente-leitura
 require_once 'config.php';
 setSecurityHeaders();

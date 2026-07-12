@@ -8,9 +8,9 @@ error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 require_once __DIR__ . '/../../templates/auth_central.php';
-verificarAutenticacaoCentral();
+exigirArea('diagnostico');
 bloquearSeSomenteLeitura(); // Bloquear acesso para usuários somente-leitura
-verificarAutenticacaoCentral();
+exigirArea('diagnostico');
 require_once 'config.php';
 
 header('Content-Type: text/html; charset=utf-8');

@@ -1,7 +1,7 @@
 <?php
 // Pagina inicial (Home)
 require_once __DIR__ . '/../../templates/auth_central.php';
-verificarAutenticacaoCentral();
+exigirArea('diagnostico');
 require_once 'config.php';
 setSecurityHeaders();
 ?>
@@ -42,7 +42,10 @@ setSecurityHeaders();
         <div class="card">
             <div class="hero">
                 <img src="static/img/logo-ifrj.png" alt="IFRJ" class="hero-logo">
-                <a class="btn btn-secondary btn-logout" href="?logout=1">Sair</a>
+                <div class="btn-logout" style="display:flex; gap:8px;">
+                    <a class="btn btn-secondary" href="../../templates/login.php">&#8592; Área Interna</a>
+                    <a class="btn btn-secondary" href="?logout=1">Sair</a>
+                </div>
                 <h1>Vigilancia Parasitaria Bovina</h1>
                 <p>Bem-vindo! Escolha uma opcao para comecar.</p>
             </div>
@@ -127,7 +130,10 @@ setSecurityHeaders();
         <div style="background:#000; border:3px solid #ff1a1a; border-radius:10px; box-shadow:0 0 40px rgba(255,0,0,0.6); max-width:820px; width:100%; max-height:85vh; display:flex; flex-direction:column; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
             <div style="padding:16px 22px; border-bottom:2px solid #ff1a1a; display:flex; align-items:center; justify-content:space-between;">
                 <h2 style="margin:0; color:#ff1a1a; font-size:1.4em; text-shadow:0 0 8px rgba(255,0,0,0.5);">⚠️ PENDÊNCIAS DE LANÇAMENTO DE DADOS</h2>
-                <button onclick="fecharPendencias()" style="background:#ff1a1a; color:#000; border:none; border-radius:6px; padding:8px 14px; font-weight:bold; cursor:pointer; font-size:14px;">✖ Fechar</button>
+                <div style="display:flex; gap:8px;">
+                    <button onclick="atualizarPendencias()" style="background:#000; color:#ff1a1a; border:1px solid #ff1a1a; border-radius:6px; padding:8px 14px; font-weight:bold; cursor:pointer; font-size:14px;">🔄 Atualizar</button>
+                    <button onclick="fecharPendencias()" style="background:#ff1a1a; color:#000; border:none; border-radius:6px; padding:8px 14px; font-weight:bold; cursor:pointer; font-size:14px;">✖ Fechar</button>
+                </div>
             </div>
             <div id="pendencias-resumo" style="padding:14px 22px; color:#ff5555; font-size:14px; line-height:1.6; border-bottom:1px dashed #ff1a1a;"></div>
             <div id="pendencias-lista" style="padding:10px 22px 18px; overflow-y:auto; color:#ff4d4d; font-size:13px; line-height:1.5;"></div>
@@ -144,51 +150,109 @@ setSecurityHeaders();
     <script>
         (function () {
             function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-            fetch('api_pendencias.php')
-                .then(r => r.json())
-                .then(d => {
-                    if (!d || !d.sucesso) return;
-                    if (!d.coletas_pendentes || d.coletas_pendentes === 0) return; // nada pendente: não abre
 
-                    const c = d.contadores || {};
-                    const linhasResumo = [];
-                    if (c.sem_data)  linhasResumo.push('🗓️ <strong>' + c.sem_data + '</strong> coleta(s) SEM data informada');
-                    if (c.clima)     linhasResumo.push('🌦️ <strong>' + c.clima + '</strong> coleta(s) com dados climáticos a gravar');
-                    if (c.pcr_cat)   linhasResumo.push('🧬 <strong>' + c.pcr_cat + '</strong> resultado(s) de PCR categórico a definir');
-                    if (c.pcr_tt)    linhasResumo.push('⏱️ <strong>' + c.pcr_tt + '</strong> PCR positivo(s) SEM Tt (tempo de detecção)');
-                    if (c.lamp_cat)  linhasResumo.push('🧪 <strong>' + c.lamp_cat + '</strong> resultado(s) de PCR-LAMP categórico a definir');
-                    if (c.lamp_tt)   linhasResumo.push('⏱️ <strong>' + c.lamp_tt + '</strong> PCR-LAMP positivo(s) SEM Tt (tempo de detecção)');
-                    if (!d.tt_pcr_habilitado) linhasResumo.push('⚠️ Colunas de Tt da PCR ainda NÃO criadas no banco (rodar sql/08_pcr_tempo_deteccao.sql).');
+            let usuarioFechou = false;  // o usuário fechou manualmente o aviso
+            let ultimoTotal   = null;   // nº de coletas pendentes na última checagem
+            let carregando    = false;  // evita requisições sobrepostas
+            let ultimaBusca   = 0;      // throttle das atualizações automáticas
 
-                    document.getElementById('pendencias-resumo').innerHTML =
-                        '<div style="color:#ff1a1a; font-weight:bold; margin-bottom:6px;">' +
-                        d.coletas_pendentes + ' de ' + d.total_coletas + ' coleta(s) com pendências:</div>' +
-                        linhasResumo.map(x => '• ' + x).join('<br>');
+            function montarConteudo(d){
+                const c = d.contadores || {};
+                const linhasResumo = [];
+                if (c.sem_data)  linhasResumo.push('🗓️ <strong>' + c.sem_data + '</strong> coleta(s) SEM data informada');
+                if (c.clima)     linhasResumo.push('🌦️ <strong>' + c.clima + '</strong> coleta(s) com dados climáticos a gravar');
+                if (c.pcr_cat)   linhasResumo.push('🧬 <strong>' + c.pcr_cat + '</strong> resultado(s) de PCR categórico a definir');
+                if (c.pcr_tt)    linhasResumo.push('⏱️ <strong>' + c.pcr_tt + '</strong> PCR positivo(s) SEM Tt (tempo de detecção)');
+                if (c.lamp_cat)  linhasResumo.push('🧪 <strong>' + c.lamp_cat + '</strong> resultado(s) de PCR-LAMP categórico a definir');
+                if (c.lamp_tt)   linhasResumo.push('⏱️ <strong>' + c.lamp_tt + '</strong> PCR-LAMP positivo(s) SEM Tt (tempo de detecção)');
+                if (!d.tt_pcr_habilitado) linhasResumo.push('⚠️ Colunas de Tt da PCR ainda NÃO criadas no banco (rodar sql/08_pcr_tempo_deteccao.sql).');
 
-                    let html = '<table style="width:100%; border-collapse:collapse;">';
-                    html += '<tr style="color:#ff1a1a; border-bottom:1px solid #ff1a1a;">' +
-                            '<th style="text-align:left; padding:5px;">Animal</th>' +
-                            '<th style="text-align:left; padding:5px;">Fazenda</th>' +
-                            '<th style="text-align:left; padding:5px;">Data</th>' +
-                            '<th style="text-align:left; padding:5px;">Pendências</th></tr>';
-                    d.itens.forEach(it => {
-                        html += '<tr style="border-bottom:1px solid #330000;">' +
-                            '<td style="padding:5px; vertical-align:top; color:#ff8888;">' + esc(it.animal) + '</td>' +
-                            '<td style="padding:5px; vertical-align:top; color:#ff8888;">' + esc(it.fazenda) + '</td>' +
-                            '<td style="padding:5px; vertical-align:top; color:#ff8888; white-space:nowrap;">' + esc(it.data) + '</td>' +
-                            '<td style="padding:5px; vertical-align:top;">' + it.pendencias.map(p => '• ' + esc(p)).join('<br>') + '</td>' +
-                            '</tr>';
-                    });
-                    html += '</table>';
-                    document.getElementById('pendencias-lista').innerHTML = html;
+                document.getElementById('pendencias-resumo').innerHTML =
+                    '<div style="color:#ff1a1a; font-weight:bold; margin-bottom:6px;">' +
+                    d.coletas_pendentes + ' de ' + d.total_coletas + ' coleta(s) com pendências:</div>' +
+                    linhasResumo.map(x => '• ' + x).join('<br>');
 
-                    document.getElementById('overlay-pendencias').style.display = 'flex';
-                })
-                .catch(() => { /* silencioso: não atrapalha a página */ });
+                let html = '<table style="width:100%; border-collapse:collapse;">';
+                html += '<tr style="color:#ff1a1a; border-bottom:1px solid #ff1a1a;">' +
+                        '<th style="text-align:left; padding:5px;">Animal</th>' +
+                        '<th style="text-align:left; padding:5px;">Fazenda</th>' +
+                        '<th style="text-align:left; padding:5px;">Data</th>' +
+                        '<th style="text-align:left; padding:5px;">Pendências</th></tr>';
+                d.itens.forEach(it => {
+                    html += '<tr style="border-bottom:1px solid #330000;">' +
+                        '<td style="padding:5px; vertical-align:top; color:#ff8888;">' + esc(it.animal) + '</td>' +
+                        '<td style="padding:5px; vertical-align:top; color:#ff8888;">' + esc(it.fazenda) + '</td>' +
+                        '<td style="padding:5px; vertical-align:top; color:#ff8888; white-space:nowrap;">' + esc(it.data) + '</td>' +
+                        '<td style="padding:5px; vertical-align:top;">' + it.pendencias.map(p => '• ' + esc(p)).join('<br>') + '</td>' +
+                        '</tr>';
+                });
+                html += '</table>';
+                document.getElementById('pendencias-lista').innerHTML = html;
+            }
+
+            // Busca o estado atual no banco (sem cache) e (re)desenha o aviso.
+            // autoAbrir=true tenta abrir; se já estiver aberto, sempre atualiza.
+            // Quando as pendências zeram, fecha sozinho.
+            function carregarPendencias(autoAbrir, forcar){
+                const agora = Date.now();
+                if (carregando) return;
+                if (!forcar && (agora - ultimaBusca) < 2000) return; // evita rajadas
+                carregando = true;
+                ultimaBusca = agora;
+
+                fetch('api_pendencias.php?_=' + agora, { cache: 'no-store' })
+                    .then(r => r.json())
+                    .then(d => {
+                        if (!d || !d.sucesso) return;
+                        const overlay  = document.getElementById('overlay-pendencias');
+                        const total    = d.coletas_pendentes || 0;
+                        const jaAberto = overlay.style.display === 'flex';
+
+                        if (total === 0) {
+                            // tudo lançado: fecha o aviso e reseta o estado
+                            overlay.style.display = 'none';
+                            usuarioFechou = false;
+                            ultimoTotal = 0;
+                            return;
+                        }
+
+                        montarConteudo(d);
+
+                        // se surgiram NOVAS pendências, volta a avisar mesmo que tenha sido fechado
+                        if (ultimoTotal !== null && total > ultimoTotal) usuarioFechou = false;
+                        ultimoTotal = total;
+
+                        if (jaAberto || (autoAbrir && !usuarioFechou)) {
+                            overlay.style.display = 'flex';
+                        }
+                    })
+                    .catch(() => { /* silencioso: não atrapalha a página */ })
+                    .finally(() => { carregando = false; });
+            }
+
+            // Carga inicial
+            carregarPendencias(true, true);
+
+            // Atualiza ao voltar para a aba/página (ex.: após salvar em Formulários,
+            // Pesquisa por Animais ou Variáveis Climáticas em outra aba)
+            document.addEventListener('visibilitychange', function(){
+                if (document.visibilityState === 'visible') carregarPendencias(true, false);
+            });
+            window.addEventListener('focus',   function(){ carregarPendencias(true, false); });
+            window.addEventListener('pageshow', function(){ carregarPendencias(true, false); });
+
+            // Atualização automática periódica enquanto a aba está aberta
+            setInterval(function(){
+                if (document.visibilityState === 'visible') carregarPendencias(false, false);
+            }, 30000);
+
+            // Expostas para os botões do aviso (onclick inline)
+            window.atualizarPendencias = function(){ carregarPendencias(true, true); };
+            window.fecharPendencias = function(){
+                document.getElementById('overlay-pendencias').style.display = 'none';
+                usuarioFechou = true;
+            };
         })();
-        function fecharPendencias() {
-            document.getElementById('overlay-pendencias').style.display = 'none';
-        }
     </script>
 </body>
 </html>
