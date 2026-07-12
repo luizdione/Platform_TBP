@@ -63,3 +63,6 @@ obsoletos/
 _stubs/
 github/
 github_template/
+
+# Memoria de projeto (PMM) - handoff/notas locais, nao versionar no repo publico
+.project-memory/
