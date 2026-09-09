@@ -59,8 +59,8 @@ docker compose exec -T db mariadb -u tpb_dev -ptpb_dev_pwd u112348440_ifrj_crj_l
 echo.
 echo ============================================================
 echo  CONCLUIDO. Recarregue:
-echo    http://localhost:8080/relatorio_cientifico.php
+echo    http://localhost:8085/relatorio_cientifico.php
 echo  Se vazio, abra:
-echo    http://localhost:8080/diagnostico_view.php
+echo    http://localhost:8085/diagnostico_view.php
 echo ============================================================
 pause

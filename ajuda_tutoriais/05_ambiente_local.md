@@ -14,7 +14,7 @@ Rodar uma cópia da plataforma no seu PC, em paralelo ao Hostinger, sem afetar p
 HOSTINGER (produção)              PC LOCAL (desenvolvimento + análises)
 ────────────────────              ─────────────────────────────────────
 auth-db887.hstgr.io               Docker Desktop:
-  • PHP 8.x                         • web    (PHP 8.2 + Apache)  → http://localhost:8080
+  • PHP 8.x                         • web    (PHP 8.2 + Apache)  → http://localhost:8085
   • MariaDB                         • db     (MariaDB 11.4)      → localhost:3307
                                     • pma    (phpMyAdmin)        → http://localhost:8081
                                   Python (analise_python/) ← lê v_dados_cientificos
@@ -36,8 +36,8 @@ docker compose up -d --build
 
 Aguarde 3–5 minutos (build + import do dump). Confirme:
 
-- http://localhost:8080/dashboard.php
-- http://localhost:8080/manutencao.php
+- http://localhost:8085/dashboard.php
+- http://localhost:8085/manutencao.php
 - http://localhost:8081/ (phpMyAdmin — login `tpb_dev` / senha `SUA_SENHA_LOCAL`)
 
 ## Aplicar migrações no banco local

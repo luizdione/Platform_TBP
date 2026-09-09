@@ -1,6 +1,6 @@
 # 🆘 Solução de problemas comuns
 
-## A plataforma local não abre (http://localhost:8080)
+## A plataforma local não abre (http://localhost:8085)
 
 1. Docker Desktop está rodando? (ícone de baleia na bandeja).
 2. Subir contêineres:

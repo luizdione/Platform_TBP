@@ -21,7 +21,7 @@ services:
       dockerfile: docker/Dockerfile
     container_name: tpb_web
     ports:
-      - "8080:80"
+      - "8085:80"
     volumes:
       - ./:/var/www/html:rw
       # Stub de auth_central.php — montado no caminho que ../../templates resolve.
